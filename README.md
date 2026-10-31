@@ -1,5 +1,17 @@
 # zmk-feature-os-detection
 
+## Reviewed fork
+
+This fork's reviewed source is on `codex/os-detection-review` in
+[`amgskobo/zmk-feature-os-detection`](https://github.com/amgskobo/zmk-feature-os-detection/tree/codex/os-detection-review).
+Select that repository URL and revision in the module's west project entry.
+Keep the module's documented imports enabled where required. The original
+upstream installation examples below describe the upstream repository.
+
+The dependency manifests select the available Custom Settings revision
+`b91a8ceb0a57a0cf41b34270752d79463e2848fa` from its reviewed fork;
+production imports and isolated tests use the same registry implementation.
+
 ![ZMK Version](https://img.shields.io/badge/ZMK-cormoran%20fork-blue)
 [![Test](https://github.com/cormoran/zmk-feature-os-detection/actions/workflows/zmk-module.yml/badge.svg?branch=main)](https://github.com/cormoran/zmk-feature-os-detection/actions/workflows/zmk-module.yml)
 
@@ -34,9 +46,10 @@ source code.
   `zmk_os_detection_current()` and the `zmk_os_changed` event report.
 
 **Read [docs/fingerprints.md](docs/fingerprints.md) before relying on this
-in production.** The classifier thresholds shipped here are placeholders
-based on the general behavior described for each OS, not a verified
-capture - see "Known limitations" below.
+in production.** The rules follow the finite dated USB/BLE observations in
+that guide. Those captures establish the observed patterns on their original
+hosts, rather than general accuracy across OS versions or current firmware.
+Manual BLE overrides remain necessary for ambiguous hosts.
 
 ## Installing
 
@@ -76,9 +89,6 @@ CONFIG_ZMK_OS_DETECTION=y
 # ZMK transport (ZMK_USB / ZMK_BLE) to already be enabled.
 CONFIG_ZMK_OS_DETECTION_USB=y
 CONFIG_ZMK_OS_DETECTION_BLE=y
-
-# Optional: iPhone/iPad ANCS/AMS probe as an extra BLE signal (off by default)
-CONFIG_ZMK_OS_DETECTION_BLE_GATT_CLIENT_PROBE=y
 
 # Optional: Custom Studio RPC + Web UI for live state and BLE overrides
 CONFIG_ZMK_STUDIO=y
@@ -177,8 +187,9 @@ Pages automatically (see `.github/workflows/web-ui.yml`).
   but the real Mac sends it too (the earlier macOS capture had just stopped one
   packet too early), so a Mac was being misdetected as iOS; that heuristic was
   removed. This is the same "shared stack ⇒ can't tell apart over USB" situation
-  as ChromeOS/Android above. `ZMK_OS_IOS` is still produced over **BLE** (opt-in
-  ANCS/AMS probe), where the distinction is real.
+  as ChromeOS/Android above. BLE also reports the observed Apple patterns as
+  macOS. No ANCS/AMS probe is implemented; `ZMK_OS_IOS` remains available for a
+  manual BLE profile override.
 - **KVM switches and some USB hubs don't force re-enumeration** on switch,
   so USB detection can miss a host change until the next physical
   reconnect.
@@ -189,17 +200,12 @@ Pages automatically (see `.github/workflows/web-ui.yml`).
   error rather than a silently-broken feature) - the long-term fix is an
   observation hook contributed to ZMK itself
   ([zmkfirmware/zmk#2553](https://github.com/zmkfirmware/zmk/issues/2553)).
-- **BLE detection is inherently heuristic, and currently reports live with
-  no debounce.** The reported OS can visibly change multiple times within
-  one connection as more GATT characteristics get read (a real Windows
-  capture on 2026-07-05 briefly reported Linux, then macOS, before settling
-  on Windows within about 2 seconds) - see
-  [docs/fingerprints.md](docs/fingerprints.md)'s "Real bug this capture
-  exposed" note. Treat per-profile manual override via the Web UI as the
-  primary way to get a reliable result; auto-detection is only a first
-  guess, refined as more GATT signals arrive, and anything reacting to
-  `zmk_os_changed` mid-connection (e.g. auto-layer-switch) can see a
-  transient wrong value.
+- **BLE detection is inherently heuristic.** A profile settles after
+  `CONFIG_ZMK_OS_DETECTION_BLE_SETTLE_MS` without another relevant discovery
+  read, then latches until reconnect. Unrelated reads such as battery polling
+  do not restart that timer. Debouncing reduces transient guesses; it does
+  not resolve ambiguous fingerprints. Treat the per-profile manual override
+  as the reliable way to select an OS value when automatic inference is wrong.
 - **BLE cannot reliably distinguish Windows from Linux.** Real captures
   (2026-07-05, both a real Windows PC and this project's own Linux
   dev host's BlueZ) read the *identical* set of GATT characteristics -
@@ -208,8 +214,8 @@ Pages automatically (see `.github/workflows/web-ui.yml`).
   read-set signal to split them, `zmk_os_classify_ble()` deliberately
   resolves this ambiguous case to `ZMK_OS_WINDOWS` (larger install base) -
   Linux users hitting this should use the Web UI's manual per-profile
-  override. See [docs/fingerprints.md](docs/fingerprints.md)'s "Real Linux
-  capture" section for the full data and reasoning.
+  override. See the retained dated observations in
+  [docs/fingerprints.md](docs/fingerprints.md) for the finite data and ambiguity.
 - **Custom Studio RPC is an unofficial protocol** and requires the
   `cormoran/zmk` fork (`main+custom-studio-protocol`) rather than upstream
   ZMK.
@@ -226,14 +232,22 @@ Pages automatically (see `.github/workflows/web-ui.yml`).
 - **BLE cannot distinguish iOS from macOS either.** A real iPhone capture
   read only the HIDS Report Map, matching the fallback rule that also
   covers macOS - `ZMK_OS_IOS` is never produced by a real BLE capture today
-  (the ANCS/AMS-based signal meant to detect it,
-  `CONFIG_ZMK_OS_DETECTION_BLE_GATT_CLIENT_PROBE`, is an unimplemented
-  Kconfig stub). See [docs/fingerprints.md](docs/fingerprints.md)'s "Real
-  iPhone capture" section for exactly what was captured, what's still a
-  guess, and how to update either with new real capture data (including a
-  working J-Link RTT capture recipe).
+  (an ANCS/AMS GATT client probe was planned to detect it; its
+  never-implemented Kconfig stub has been removed). See the current BLE rules and dated observations in
+  [docs/fingerprints.md](docs/fingerprints.md), and the separate current
+  [capture procedure](docs/hw-capture-recipe.md).
 
 ## Development
+
+`python3 tests/override-boundary/run.py` checks override failure/retry and
+full-width RPC profile indices with the complete production policy/handler
+sources and real nanopb. Select a resolved workspace, or set `NANOPB_SOURCE`
+explicitly. See [the boundary contract](tests/override-boundary/README.md).
+The check covers a changed effective OS after a failed save: the storage error
+is retained, and the changed RAM value still raises one local OS event.
+Unchanged values and invalid requests do not raise another event. Existing
+native classifier/registration fixtures and real transport/NVS acceptance
+remain separate.
 
 ### Setup
 
@@ -270,7 +284,7 @@ this).
 
 ```bash
 # Unit tests (native_sim, incl. TEST_INJECT USB/RPC scenarios) + build tests
-python3 -m unittest
+python3 -m unittest discover -s tests -p test_owner.py
 # Build tests only
 west zmk-build tests/zmk-config
 # Unit tests only
@@ -281,40 +295,16 @@ cd web && npm test
 
 ### Manual real-hardware verification
 
-Automated tests cover the classifier logic and RPC/build wiring, but the
-actual fingerprint thresholds need verification against real hosts before
-you can trust them:
+The current software matrix covers classifier, protocol, feature/role and Web
+boundaries. Dated host observations are summarized in
+[the fingerprint guide](docs/fingerprints.md); they do not establish physical
+acceptance of a changed checkout or artifact.
 
-1. Flash a board with `CONFIG_ZMK_OS_DETECTION_USB=y` (and `_BLE=y` if
-   testing BLE) enabled - `tests/zmk-config`'s `os_detection_board_with_rpc`
-   and `os_detection_custom_settings_board` artifacts already have this
-   (plus [zmk-module-ble-management](https://github.com/cormoran/zmk-module-ble-management)
-   and `CONFIG_ZMK_STUDIO_LOCKING=n`, so you can switch/unpair BLE profiles
-   from its web UI and connect Studio without an unlock key-combo while
-   repeatedly re-pairing to different hosts below).
-2. **USB**: already verified against a real Mac, a real Windows PC, a real
-   Linux machine, a real Android device (OTG host mode), and a real iPhone
-   (see [docs/fingerprints.md](docs/fingerprints.md)). If you want to
-   re-verify against a different OS version, plug into that
-   host and capture the enumeration with `usbmon` (Linux: `sudo modprobe
-   usbmon; sudo cat /sys/kernel/debug/usb/usbmon/1u`), Wireshark+USBPcap
-   (Windows), or Wireshark's built-in USB capture (macOS) - or, if you have
-   J-Link SWD access to the board (independent of whatever host its USB-C
-   is plugged into), flash a debug build and read the module's own
-   `zmk_os_detection_observe_setup()` `LOG_DBG` output straight out of
-   target RAM; see [docs/fingerprints.md](docs/fingerprints.md)'s "RTT
-   capture recipe" for the exact commands (this is how the existing
-   signatures were captured). Compare against `zmk_os_detection_current()`
-   / the Web UI's USB card, and update the thresholds in
-   `src/os_detection_usb.c` + `docs/fingerprints.md` to match what you
-   actually captured.
-3. **BLE**: pair the same board with a Windows PC, a Mac, an iPhone, an
-   Android device, and a Linux desktop (already done once, 2026-07-05 - see
-   [docs/fingerprints.md](docs/fingerprints.md)). Check the Web UI's BLE
-   profile table for each; use `btmon` (Linux) or `PacketLogger` (macOS) to
-   see the actual GATT access pattern if the auto-detected OS is wrong, and
-   adjust `src/os_detection_ble.c` + `docs/fingerprints.md`.
-4. Confirm overrides set from the Web UI persist across a reboot.
+Follow [the current capture procedure](docs/hw-capture-recipe.md) for selected
+source/configuration/artifact identity, ordered USB/GATT evidence and separate
+host HID/override-persistence results. Current production debug logs contain
+settled statistics, not a complete per-packet trace. The old July rig commands,
+partition offsets and unlocked sample firmware instructions are archived.
 
 ### Sync changes from template
 

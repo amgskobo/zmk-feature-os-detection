@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "owner": "zmk-os-detection-fork",
+  "supported_cores": ["dya"],
+  "unsupported_core_status": "NOT APPLICABLE",
+  "commands": [
+    "python3 -m unittest discover -v -s tests -p test_owner.py",
+    "bash tests/run-web.sh"
+  ],
+  "coverage_map": "tests/README.md",
+  "web_lifecycle_fixture": "tests/web/lifecycle.spec.tsx: twelve actual-provider scenarios for poll/override success, error, loading completion, unmount, serialized automatic polling, foreground override completion and four index-only cases retaining the same provider/connection with actual SDK subsystem indices 2 and 7; fifteen original scenarios retained.",
+  "web_polling_fixture": "tests/web/polling.spec.tsx: seven provider/SDK scenarios for single-flight automatic admission, valid 4000ms responses, foreground override ownership, actual 5000ms SDK timeout/recovery, source cleanup and empty/malformed/remote-error release;3000ms interval and SDK deadline unchanged. All prior lifecycle assertions retained with classified non-overlap timing. Canonical test/watch/coverage regenerate the current schema before collection.",
+  "preserved_assertions": "Relocated fixtures retain their prior assertions; no snapshot auto-accept or unique assertion removal.",
+  "execution": {
+    "quick": "All behavioral scenarios once; sanitizer variants where supported.",
+    "full": "Same scenarios plus relevant optimization, ABI, role, kernel and supported-core checks.",
+    "outputs": "Use a fresh evidence directory; existing evidence is never overwritten."
+  },
+  "gaps": [
+    "Physical USB/BLE/split delivery, timing, power and retention require matching production-board evidence."
+  ],
+  "native_verification": "tests/native_verifier.py: actual exit, registered test completion, raw ordered logs, unchanged snapshots, identical binary repeated three times.",
+  "regression_fixtures": [
+    {
+      "fixture": "tests/override-boundary/harness.c",
+      "contract": "Read invalid stored/imported OS values as UNKNOWN without storage writes/events; valid enums, independent profiles, detected fallback and decoded nanopb response remain exact."
+    },
+    {
+      "fixture": "tests/usb-boundary/harness.c",
+      "contract": "Complete production USB observer/classifier: all four presence counters saturate across 65535/65536/longer valid reads; ignored requests add no evidence or debounce; reset and independent Apple/Linux/Windows classifications remain exact under optimization and ASan/UBSan."
+    }
+  ]
+}
