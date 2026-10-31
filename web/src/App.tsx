@@ -1,5 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import "./App.css";
+import { useConnectionKey, useRequestLifetime } from "./requestLifetime";
 import { connect as serial_connect } from "@zmkfirmware/zmk-studio-ts-client/transport/serial";
 import {
   ZMKConnection,
@@ -98,7 +99,15 @@ function App() {
 }
 
 export function OsDetectionSection() {
+  const app = useContext(ZMKAppContext);
+  const index = app?.findSubsystem(SUBSYSTEM_IDENTIFIER)?.index;
+  const key = useConnectionKey(app?.state.connection, index);
+  return <OsDetectionStateSection key={key} />;
+}
+
+function OsDetectionStateSection() {
   const zmkApp = useContext(ZMKAppContext);
+  const beginRequest = useRequestLifetime();
   const [state, setState] = useState<StateResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,32 +122,43 @@ export function OsDetectionSection() {
     [zmkApp]
   );
 
-  const fetchState = useCallback(async () => {
-    if (!zmkApp?.state.connection || !subsystem) return;
+  const fetchState = useCallback(
+    async (automatic = false) => {
+      if (!zmkApp?.state.connection || !subsystem) return;
+      const request = beginRequest(automatic ? "poll" : "foreground");
+      if (!request) return;
+      const { active, finish } = request;
 
-    setIsLoading(true);
-    try {
-      const service = new ZMKCustomSubsystem(
-        zmkApp.state.connection,
-        subsystem.index
-      );
-      const payload = Request.encode(Request.create({ getState: {} })).finish();
-      const responsePayload = await service.callRPC(payload);
-      if (!responsePayload) return;
+      setIsLoading(true);
+      try {
+        const service = new ZMKCustomSubsystem(
+          zmkApp.state.connection,
+          subsystem.index
+        );
+        const payload = Request.encode(
+          Request.create({ getState: {} })
+        ).finish();
+        const responsePayload = await service.callRPC(payload);
+        if (!active()) return;
+        if (!responsePayload) return;
 
-      const resp = Response.decode(responsePayload);
-      if (resp.state) {
-        setState(resp.state);
-        setError(null);
-      } else if (resp.error) {
-        setError(resp.error.message);
+        const resp = Response.decode(responsePayload);
+        if (resp.state) {
+          setState(resp.state);
+          setError(null);
+        } else if (resp.error) {
+          setError(resp.error.message);
+        }
+      } catch (e) {
+        if (active())
+          setError(e instanceof Error ? e.message : "Unknown error");
+      } finally {
+        if (active()) setIsLoading(false);
+        finish();
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [zmkApp, subsystem]);
+    },
+    [zmkApp, subsystem, beginRequest]
+  );
 
   useEffect(() => {
     // Fetch-on-mount + poll while connected is the intended behavior here
@@ -147,13 +167,17 @@ export function OsDetectionSection() {
     // effect-body writes, but the rule can't distinguish that through the
     // useCallback indirection.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchState();
-    const interval = setInterval(fetchState, POLL_INTERVAL_MS);
+    void fetchState(true);
+    const interval = setInterval(() => void fetchState(true), POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchState]);
 
   const sendOverride = async (profileIndex: number, os: Os) => {
     if (!zmkApp?.state.connection || !subsystem) return;
+    const request = beginRequest();
+    if (!request) return;
+    const { active, finish } = request;
+    setIsLoading(true);
 
     try {
       const service = new ZMKCustomSubsystem(
@@ -164,6 +188,7 @@ export function OsDetectionSection() {
         Request.create({ setBleOverride: { profileIndex, os } })
       ).finish();
       const responsePayload = await service.callRPC(payload);
+      if (!active()) return;
       if (!responsePayload) return;
 
       const resp = Response.decode(responsePayload);
@@ -184,7 +209,10 @@ export function OsDetectionSection() {
         setError(resp.error.message);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
+      if (active()) setError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      if (active()) setIsLoading(false);
+      finish();
     }
   };
 
@@ -216,7 +244,7 @@ export function OsDetectionSection() {
       <button
         className="btn btn-primary"
         disabled={isLoading}
-        onClick={fetchState}
+        onClick={() => void fetchState()}
       >
         {isLoading ? "⏳ Refreshing..." : "🔄 Refresh"}
       </button>

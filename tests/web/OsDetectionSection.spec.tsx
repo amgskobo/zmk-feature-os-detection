@@ -5,13 +5,13 @@ import {
   ZMKAppProvider,
 } from "@cormoran/zmk-studio-react-hook/testing";
 import { ZMKCustomSubsystem } from "@cormoran/zmk-studio-react-hook";
-import { OsDetectionSection, SUBSYSTEM_IDENTIFIER } from "../src/App";
+import { OsDetectionSection, SUBSYSTEM_IDENTIFIER } from "../../web/src/App";
 import {
   Os,
   Request,
   Response,
   StateResponse,
-} from "../src/proto/cormoran/os-detection/os_detection";
+} from "../../web/src/proto/cormoran/os-detection/os_detection";
 
 function encodedState(overrides: Partial<StateResponse> = {}): Uint8Array {
   const state = StateResponse.create({
@@ -48,16 +48,16 @@ describe("OsDetectionSection Component", () => {
       render(
         <ZMKAppProvider value={mockZMKApp}>
           <OsDetectionSection />
-        </ZMKAppProvider>
+        </ZMKAppProvider>,
       );
 
       expect(
-        screen.getByText(/Subsystem "cormoran__os_detection" not found/i)
+        screen.getByText(/Subsystem "cormoran__os_detection" not found/i),
       ).toBeInTheDocument();
       expect(
         screen.getByText(
-          /Make sure your firmware includes the zmk-feature-os-detection module/i
-        )
+          /Make sure your firmware includes the zmk-feature-os-detection module/i,
+        ),
       ).toBeInTheDocument();
     });
   });
@@ -76,7 +76,7 @@ describe("OsDetectionSection Component", () => {
       render(
         <ZMKAppProvider value={mockZMKApp}>
           <OsDetectionSection />
-        </ZMKAppProvider>
+        </ZMKAppProvider>,
       );
 
       await waitFor(() => {
@@ -106,7 +106,7 @@ describe("OsDetectionSection Component", () => {
       render(
         <ZMKAppProvider value={mockZMKApp}>
           <OsDetectionSection />
-        </ZMKAppProvider>
+        </ZMKAppProvider>,
       );
 
       await waitFor(() => {
@@ -134,7 +134,7 @@ describe("OsDetectionSection Component", () => {
       render(
         <ZMKAppProvider value={mockZMKApp}>
           <OsDetectionSection />
-        </ZMKAppProvider>
+        </ZMKAppProvider>,
       );
 
       const select = await screen.findByLabelText("override-profile-0");
@@ -152,8 +152,8 @@ describe("OsDetectionSection Component", () => {
                 effective: Os.OS_WINDOWS,
               },
             },
-          })
-        ).finish()
+          }),
+        ).finish(),
       );
 
       const user = userEvent.setup();
