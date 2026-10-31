@@ -1,13 +1,28 @@
+#include <errno.h>
+#include <stdio.h>
+
 #include <pb_decode.h>
 #include <pb_encode.h>
 #include <zephyr/sys/util.h>
+#include <zmk/studio/core.h>
 #include <zmk/studio/custom.h>
 #include <cormoran/os-detection/os_detection.pb.h>
 
 #include "../os_detection_internal.h"
 
+#if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
+#include <zmk/ble.h>
+BUILD_ASSERT(ZMK_BLE_PROFILE_COUNT <=
+                 ARRAY_SIZE(((cormoran_os_detection_StateResponse *)NULL)->ble_profiles),
+             "every BLE profile must fit one StateResponse");
+#endif
+
 #include <zephyr/logging/log.h>
-LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+#ifndef CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL
+#define CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL 3
+#endif
+LOG_MODULE_REGISTER(zmk_os_detection_fork_os_detection_handler,
+                    CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL);
 
 static struct zmk_rpc_custom_subsystem_meta os_detection_meta = {
     ZMK_RPC_CUSTOM_SUBSYSTEM_UI_URLS("https://cormoran.github.io/zmk-feature-os-detection/"),
@@ -20,6 +35,13 @@ ZMK_RPC_CUSTOM_SUBSYSTEM(cormoran__os_detection, &os_detection_meta,
                          os_detection_rpc_handle_request);
 
 ZMK_RPC_CUSTOM_SUBSYSTEM_RESPONSE_BUFFER(cormoran__os_detection, cormoran_os_detection_Response);
+
+static void set_error(cormoran_os_detection_Response *resp, const char *message) {
+    cormoran_os_detection_ErrorResponse err = cormoran_os_detection_ErrorResponse_init_zero;
+    snprintf(err.message, sizeof(err.message), "%s", message);
+    resp->which_response_type = cormoran_os_detection_Response_error_tag;
+    resp->response_type.error = err;
+}
 
 /* enum zmk_os starts at ZMK_OS_UNKNOWN=0; cormoran_os_detection_Os starts at
  * OS_UNSPECIFIED=0 with OS_UNKNOWN=1, so the proto value is always exactly
@@ -68,7 +90,7 @@ static void handle_get_state(cormoran_os_detection_StateResponse *out) {
 static int handle_set_ble_override(const cormoran_os_detection_SetBleOverrideRequest *req,
                                    cormoran_os_detection_Response *resp) {
     int profile_count = zmk_os_detection_ble_profile_count();
-    if ((int)req->profile_index >= profile_count) {
+    if (req->profile_index >= (uint32_t)profile_count) {
         return -EINVAL;
     }
 
@@ -99,62 +121,47 @@ static bool os_detection_rpc_handle_request(const zmk_custom_CallRequest *raw_re
         pb_istream_from_buffer(raw_request->payload.bytes, raw_request->payload.size);
     if (!pb_decode(&req_stream, cormoran_os_detection_Request_fields, &req)) {
         LOG_WRN("Failed to decode os_detection request: %s", PB_GET_ERROR(&req_stream));
-        cormoran_os_detection_ErrorResponse err = cormoran_os_detection_ErrorResponse_init_zero;
-        snprintf(err.message, sizeof(err.message), "Failed to decode request");
-        resp->which_response_type = cormoran_os_detection_Response_error_tag;
-        resp->response_type.error = err;
+        set_error(resp, "Failed to decode request");
         return true;
     }
 
-    int rc = 0;
     switch (req.which_request_type) {
     case cormoran_os_detection_Request_get_state_tag:
         resp->which_response_type = cormoran_os_detection_Response_state_tag;
         handle_get_state(&resp->response_type.state);
-        break;
+        return true;
     case cormoran_os_detection_Request_set_ble_override_tag:
-        rc = handle_set_ble_override(&req.request_type.set_ble_override, resp);
         break;
     default:
         LOG_WRN("Unsupported os_detection request type: %d", req.which_request_type);
-        rc = -1;
+        set_error(resp, "Unsupported request");
+        return true;
     }
 
-    if (rc != 0) {
-        cormoran_os_detection_ErrorResponse err = cormoran_os_detection_ErrorResponse_init_zero;
-        snprintf(err.message, sizeof(err.message), "Failed to process request");
-        resp->which_response_type = cormoran_os_detection_Response_error_tag;
-        resp->response_type.error = err;
+    /* The override settings declare SECURE write permission, but this RPC
+     * writes them directly, and the subsystem stays UNSECURED so the state
+     * can be read while Studio is locked. An override can switch the default
+     * layer, so only an unlocked Studio may change it. */
+    if (zmk_studio_core_get_lock_state() != ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED) {
+        LOG_WRN("OS override change refused: Studio is locked");
+        set_error(resp, "Unlock required");
+        return true;
+    }
+
+    int rc = handle_set_ble_override(&req.request_type.set_ble_override, resp);
+    if (rc == -EINVAL) {
+        set_error(resp, "Invalid profile or OS");
+    } else if (rc == -ENOTSUP) {
+        set_error(resp, "Overrides need BLE detection and Custom Settings");
+    } else if (rc != 0) {
+        /* Custom Settings keeps the new RAM value when saving fails. */
+        char message[sizeof(resp->response_type.error.message)];
+        snprintf(message, sizeof(message), "Override applied but not saved: %d", rc);
+        set_error(resp, message);
     }
     return true;
 }
 
 #if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_TEST_INJECT)
-
-/* Exercises the handler's actual business logic (handle_get_state /
- * handle_set_ble_override) directly, rather than round-tripping through the
- * generic nanopb bytes-field encode plumbing shared by every custom
- * subsystem in the template - that plumbing is unmodified template code,
- * not specific to this module. */
-static int os_detection_handler_test_init(void) {
-    cormoran_os_detection_StateResponse state = cormoran_os_detection_StateResponse_init_zero;
-    handle_get_state(&state);
-    LOG_INF("os detection: get_state usb_connected=%d usb_detected=%d ble_profiles_count=%d "
-            "current_effective=%d",
-            state.usb.connected, state.usb.detected, state.ble_profiles_count,
-            state.current_effective);
-
-    cormoran_os_detection_SetBleOverrideRequest override_req = {
-        .profile_index = 0,
-        .os = cormoran_os_detection_Os_OS_WINDOWS,
-    };
-    cormoran_os_detection_Response override_resp = cormoran_os_detection_Response_init_zero;
-    int rc = handle_set_ble_override(&override_req, &override_resp);
-    LOG_INF("os detection: set_ble_override(profile=0, WINDOWS) rc=%d", rc);
-
-    return 0;
-}
-
-SYS_INIT(os_detection_handler_test_init, APPLICATION, CONFIG_APPLICATION_INIT_PRIORITY);
-
+#include "../../tests/support/os_detection_handler_assertions_0.inc"
 #endif /* CONFIG_ZMK_OS_DETECTION_TEST_INJECT */

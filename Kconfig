@@ -40,11 +40,6 @@ config ZMK_OS_DETECTION_BLE_SETTLE_MS
       are ignored until it reconnects. Larger than the USB debounce because BLE
       discovery reads are spread across a slower connection interval.
 
-config ZMK_OS_DETECTION_BLE_GATT_CLIENT_PROBE
-    bool "Opt-in: discover ANCS/AMS/Device Name as a GATT client after pairing"
-    depends on ZMK_OS_DETECTION_BLE
-    select BT_GATT_CLIENT
-
 config ZMK_OS_DETECTION_LAYER_AUTO_SWITCH
     bool "Auto-activate a keymap layer based on the detected OS"
     default n
@@ -99,3 +94,11 @@ config ZMK_OS_DETECTION_TEST_INJECT
       that port.
 
 endif
+
+config ZMK_OS_DETECTION_FORK_LOG_LEVEL
+    int "zmk-os-detection-fork log level (0 off, 1 error, 2 warning, 3 info, 4 debug)"
+    range 0 4
+    default 3
+    help
+      Logs contain operational state and numeric diagnostics, never input
+      contents, user labels, peer addresses or authentication material.

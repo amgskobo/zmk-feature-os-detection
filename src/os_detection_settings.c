@@ -29,10 +29,11 @@
  * arrays share it since every element defaults to ZMK_OS_UNKNOWN; it is sized
  * for the 8-profile ceiling (>= ZMK_BLE_PROFILE_COUNT), the array registration
  * only consumes its first ZMK_BLE_PROFILE_COUNT entries. NO_CONSTRAINT is used
- * instead of a range constraint - see the ZMK_CUSTOM_SETTING_RANGE_INT32
- * pitfall noted in DESIGN.md. */
+ * instead of a range constraint. Reads validate the persisted raw enum before
+ * it can affect classification; invalid imported values remain stored but are
+ * interpreted as UNKNOWN. */
 
-/* CONFIG_ZMK_BLE_PROFILE_COUNT (== CONFIG_BT_MAX_PAIRED, minus split
+/* ZMK_BLE_PROFILE_COUNT (== CONFIG_BT_MAX_PAIRED, minus split
  * peripherals) defaults to 5; support up to 8 to leave headroom. */
 BUILD_ASSERT(ZMK_BLE_PROFILE_COUNT <= 8,
              "zmk-feature-os-detection only defines settings for up to 8 BLE profiles");
@@ -42,24 +43,26 @@ ZMK_CUSTOM_SETTING_ARRAY_DEFAULT_INT32_DEFINE(os_detection_ble_defaults, ZMK_OS_
                                               ZMK_OS_UNKNOWN, ZMK_OS_UNKNOWN, ZMK_OS_UNKNOWN,
                                               ZMK_OS_UNKNOWN);
 
-ZMK_CUSTOM_SETTING_ARRAY_DEFINE(os_detection_ble_detected, "cormoran__os_detection", "ble_detected",
-                                ZMK_CUSTOM_SETTING_VALUE_TYPE_INT32, ZMK_BLE_PROFILE_COUNT,
-                                ZMK_BLE_PROFILE_COUNT, os_detection_ble_defaults,
+ZMK_CUSTOM_SETTING_ARRAY_DEFINE(os_detection_ble_detected, OS_DETECTION_SUBSYSTEM_ID,
+                                "ble_detected", ZMK_CUSTOM_SETTING_VALUE_TYPE_INT32,
+                                ZMK_BLE_PROFILE_COUNT, ZMK_BLE_PROFILE_COUNT,
+                                os_detection_ble_defaults,
                                 ZMK_CUSTOM_SETTING_CONFIDENTIALITY_RPC_PERSONAL,
                                 ZMK_CUSTOM_SETTING_PERMISSION_UNSECURE,
                                 ZMK_CUSTOM_SETTING_PERMISSION_SECURE,
                                 ZMK_CUSTOM_SETTING_NO_CONSTRAINT);
 
-ZMK_CUSTOM_SETTING_ARRAY_DEFINE(os_detection_ble_override, "cormoran__os_detection", "ble_override",
-                                ZMK_CUSTOM_SETTING_VALUE_TYPE_INT32, ZMK_BLE_PROFILE_COUNT,
-                                ZMK_BLE_PROFILE_COUNT, os_detection_ble_defaults,
+ZMK_CUSTOM_SETTING_ARRAY_DEFINE(os_detection_ble_override, OS_DETECTION_SUBSYSTEM_ID,
+                                "ble_override", ZMK_CUSTOM_SETTING_VALUE_TYPE_INT32,
+                                ZMK_BLE_PROFILE_COUNT, ZMK_BLE_PROFILE_COUNT,
+                                os_detection_ble_defaults,
                                 ZMK_CUSTOM_SETTING_CONFIDENTIALITY_RPC_PERSONAL,
                                 ZMK_CUSTOM_SETTING_PERMISSION_UNSECURE,
                                 ZMK_CUSTOM_SETTING_PERMISSION_SECURE,
                                 ZMK_CUSTOM_SETTING_NO_CONSTRAINT);
 
 static const struct zmk_custom_setting *find_setting(const char *key, uint8_t profile_index) {
-    return zmk_custom_setting_find_array_element("cormoran__os_detection", key, profile_index);
+    return zmk_custom_setting_find_array_element(OS_DETECTION_SUBSYSTEM_ID, key, profile_index);
 }
 
 static enum zmk_os read_setting(const char *key, uint8_t profile_index) {
@@ -69,6 +72,12 @@ static enum zmk_os read_setting(const char *key, uint8_t profile_index) {
     }
     struct zmk_custom_setting_value value;
     if (zmk_custom_setting_read(setting, &value) != 0) {
+        return ZMK_OS_UNKNOWN;
+    }
+    /* Stored/imported array elements can bypass the OS-specific RPC setter.
+     * Consume an invalid classification as unavailable without rewriting it. */
+    if (value.int32_value < (int32_t)ZMK_OS_UNKNOWN ||
+        value.int32_value > (int32_t)ZMK_OS_ANDROID) {
         return ZMK_OS_UNKNOWN;
     }
     return (enum zmk_os)value.int32_value;

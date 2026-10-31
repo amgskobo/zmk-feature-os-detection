@@ -24,7 +24,15 @@
 #include <zmk/events/ble_active_profile_changed.h>
 #endif
 
-LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+#if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE) && IS_ENABLED(CONFIG_ZMK_CUSTOM_SETTINGS)
+#include <cormoran/zmk/custom_settings.h>
+#endif
+
+#ifndef CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL
+#define CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL 3
+#endif
+LOG_MODULE_REGISTER(zmk_os_detection_fork_os_detection_core,
+                    CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL);
 
 ZMK_EVENT_IMPL(zmk_os_changed);
 
@@ -100,18 +108,6 @@ enum zmk_os zmk_os_detection_ble_profile_effective(uint8_t profile_index) {
     return zmk_os_detection_ble_profile_detected(profile_index);
 }
 
-int zmk_os_detection_active_ble_profile_index(void) {
-#if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
-    struct zmk_endpoint_instance endpoint = zmk_endpoint_get_selected();
-    if (endpoint.transport != ZMK_TRANSPORT_BLE) {
-        return -1;
-    }
-    return endpoint.ble.profile_index;
-#else
-    return -1;
-#endif
-}
-
 uint8_t zmk_os_detection_selected_ble_profile_index(void) {
 #if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
     int index = zmk_ble_active_profile_index();
@@ -135,7 +131,12 @@ enum zmk_os zmk_os_detection_current(void) {
     }
 }
 
-static void raise_if_changed(void) {
+/* zmk_os_changed listeners change keymap layers (zmk-feature-default-layer,
+ * the auto-switch below), which only the system work queue may do: it is the
+ * thread key events run on. Changes that arrive on the Studio RPC or
+ * Bluetooth thread therefore only queue this work, which raises the event. */
+static void os_changed_work_handler(struct k_work *work) {
+    ARG_UNUSED(work);
     enum zmk_os current = zmk_os_detection_current();
     if (current == last_raised) {
         return;
@@ -144,6 +145,10 @@ static void raise_if_changed(void) {
     LOG_INF("os detection: effective OS for active endpoint changed to %d", current);
     raise_zmk_os_changed((struct zmk_os_changed){.os = current});
 }
+
+static K_WORK_DEFINE(os_changed_work, os_changed_work_handler);
+
+static void raise_if_changed(void) { k_work_submit(&os_changed_work); }
 
 void zmk_os_detection_report_usb(enum zmk_os detected) {
     if (usb_detected == detected) {
@@ -154,20 +159,34 @@ void zmk_os_detection_report_usb(enum zmk_os detected) {
     raise_if_changed();
 }
 
+#if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
+static bool set_ble_detected(uint8_t profile_index, enum zmk_os detected) {
+    if (profile_index >= ZMK_BLE_PROFILE_COUNT || ble_detected[profile_index] == detected) {
+        return false;
+    }
+    ble_detected[profile_index] = detected;
+    raise_if_changed();
+    return true;
+}
+#endif
+
 void zmk_os_detection_report_ble_detected(uint8_t profile_index, enum zmk_os detected) {
 #if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
-    if (profile_index >= ZMK_BLE_PROFILE_COUNT) {
-        return;
-    }
-    if (ble_detected[profile_index] == detected) {
+    if (!set_ble_detected(profile_index, detected)) {
         return;
     }
     LOG_INF("os detection: BLE fingerprint for profile %d settled on %d", profile_index, detected);
-    ble_detected[profile_index] = detected;
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_SETTINGS)
     zmk_os_detection_settings_set_detected_cache(profile_index, detected);
 #endif
-    raise_if_changed();
+#endif
+}
+
+void zmk_os_detection_adopt_ble_cached(uint8_t profile_index, enum zmk_os cached) {
+#if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
+    if (set_ble_detected(profile_index, cached)) {
+        LOG_INF("os detection: BLE profile %d starts from cached guess %d", profile_index, cached);
+    }
 #endif
 }
 
@@ -177,14 +196,17 @@ int zmk_os_detection_set_ble_override(uint8_t profile_index, enum zmk_os os) {
         return -EINVAL;
     }
     int rc = zmk_os_detection_settings_set_override(profile_index, os);
-    if (rc == 0) {
-        raise_if_changed();
-    }
+    /* Custom Settings retains a new RAM value when persistence fails. Its
+     * effective OS still changed; preserve the storage error independently. */
+    raise_if_changed();
     return rc;
 #else
     return -ENOTSUP;
 #endif
 }
+
+#define OS_DETECTION_OVERRIDES                                                                     \
+    (IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE) && IS_ENABLED(CONFIG_ZMK_CUSTOM_SETTINGS))
 
 static int os_detection_listener(const zmk_event_t *eh) {
 #if IS_ENABLED(CONFIG_ZMK_USB)
@@ -192,6 +214,16 @@ static int os_detection_listener(const zmk_event_t *eh) {
         if (!zmk_usb_is_hid_ready()) {
             usb_detected = ZMK_OS_UNKNOWN;
         }
+    }
+#endif
+#if OS_DETECTION_OVERRIDES
+    /* An override written past this module's RPC (the generic custom
+     * settings RPC, a scoped discard or reset) changes the effective OS too;
+     * other subsystems' settings do not. */
+    const struct zmk_custom_setting_changed *changed = as_zmk_custom_setting_changed(eh);
+    if (changed &&
+        !zmk_custom_setting_matches(changed->setting, OS_DETECTION_SUBSYSTEM_ID, NULL, NULL)) {
+        return ZMK_EV_EVENT_BUBBLE;
     }
 #endif
     /* Endpoint switches (USB<->BLE, or BLE profile change) can change the
@@ -207,6 +239,11 @@ ZMK_SUBSCRIPTION(os_detection_core, zmk_usb_conn_state_changed);
 ZMK_SUBSCRIPTION(os_detection_core, zmk_endpoint_changed);
 #if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)
 ZMK_SUBSCRIPTION(os_detection_core, zmk_ble_active_profile_changed);
+#endif
+#if OS_DETECTION_OVERRIDES
+ZMK_SUBSCRIPTION(os_detection_core, zmk_custom_setting_changed);
+/* The boot settings load applies a persisted override without a change event. */
+ZMK_SUBSCRIPTION(os_detection_core, zmk_custom_settings_initialized);
 #endif
 
 /* --- Layer auto-switch ---

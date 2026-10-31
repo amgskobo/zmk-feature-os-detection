@@ -8,6 +8,8 @@
 
 #include <cormoran/os-detection/os_detection.h>
 
+#define OS_DETECTION_SUBSYSTEM_ID "cormoran__os_detection"
+
 /* --- USB fingerprint (os_detection_usb.c -> classifier) --- */
 
 /* Small fixed set of "interesting" wLength values seen in real captures;
@@ -42,13 +44,16 @@ struct ble_fp_stats {
     uint8_t report_ref_reads;
     uint8_t pnp_id_reads;
     uint8_t appearance_reads;
-    bool ancs_or_ams_present; /* only meaningful when the GATT client probe ran */
 };
 
 enum zmk_os zmk_os_classify_ble(const struct ble_fp_stats *stats);
 
-/* Called by os_detection_ble.c once a BLE fingerprint has settled for a profile. */
+/* Called by os_detection_ble.c once a BLE fingerprint has settled for a profile;
+ * the guess is also cached in settings for the next connection. */
 void zmk_os_detection_report_ble_detected(uint8_t profile_index, enum zmk_os detected);
+/* Called on connection with the cached guess, so it applies before the new
+ * fingerprint settles. Writes nothing back: it runs on the Bluetooth thread. */
+void zmk_os_detection_adopt_ble_cached(uint8_t profile_index, enum zmk_os cached);
 
 /* --- Settings-backed override + detected-cache (os_detection_settings.c) ---
  * Only meaningful when CONFIG_ZMK_OS_DETECTION_BLE && CONFIG_ZMK_CUSTOM_SETTINGS;
@@ -73,8 +78,6 @@ enum zmk_os zmk_os_detection_ble_profile_effective(uint8_t profile_index);
 /* Returns -ENOTSUP when BLE detection or custom settings aren't compiled in,
  * -EINVAL for an out-of-range profile_index. */
 int zmk_os_detection_set_ble_override(uint8_t profile_index, enum zmk_os os);
-/* -1 when no BLE profile is the active endpoint (USB active, or nothing connected). */
-int zmk_os_detection_active_ble_profile_index(void);
 /* The profile slot currently selected in ZMK's BLE profile switcher, valid
  * regardless of whether USB or BLE is the active transport right now.
  * 0 when BLE is not enabled. */

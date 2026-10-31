@@ -1,0 +1,23 @@
+[
+    {
+        "configs":  [
+                        "CONFIG_ZMK_OS_DETECTION_TEST_INJECT",
+                        "CONFIG_ZMK_OS_DETECTION_USB",
+                        "CONFIG_ZMK_USB"
+                    ],
+        "fixtures":  [
+                         "os_detection_usb"
+                     ],
+        "hook":  "os_detection_test_inject_init"
+    },
+    {
+        "configs":  [
+                        "CONFIG_ZMK_OS_DETECTION_TEST_INJECT",
+                        "CONFIG_ZMK_OS_DETECTION_STUDIO_RPC"
+                    ],
+        "fixtures":  [
+                         "studio"
+                     ],
+        "hook":  "os_detection_handler_test_init"
+    }
+]
