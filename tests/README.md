@@ -1,13 +1,11 @@
 # Owner tests
 
-The 2026-10-14 snapshot update changes only the logger source prefix from `zmk`
-to the module's dedicated `zmk_os_detection_fork_os_detection_core/handler`.
-All classification values, return codes, sequence and timing remain unchanged.
-This is an intended logging namespace change from the preceding logging work,
-not a behavioral correction or automatic acceptance. Original snapshot changes and raw mismatches remain in the keyboard
-`artifacts/test-reconstruction-20261014/review/` and
-`artifacts/test-reconstruction-20261014/native-v2-zmk-os-detection-fork/`.
-The former backup location was abolished; no active check depends on it.
+Snapshots use the dedicated logger source prefix
+`zmk_os_detection_fork_os_detection_core/handler`. Classification values,
+return codes, sequence and timing are independent assertions; a logger-prefix
+change must not auto-accept a behavioral mismatch. Original comparisons and
+raw mismatches belong in private task evidence, without a dependency on an
+individual integrating checkout's artifact paths.
 
 This repository owns its executable test logic and fixtures under `tests/`.
 
@@ -137,6 +135,84 @@ count; account for compiler jobs and concurrent owners in the global budget.
 `tests/test_build_budget.py` checks default/explicit forwarding and rejects
 invalid budgets before launching west. The canonical owner entry includes
 these controls without dropping any native or board scenario.
+
+## Kernel session and settings-view boundaries
+
+The canonical owner entry also runs `tests/kernel_boundary.py` for each of
+`ble-session` and `settings-view`. Each family builds one actual native kernel
+binary and runs all five cases three times in fresh process directories. Logs,
+exits, binary/input identities and unchanged input checks are retained beneath
+`OWNER_TEST_OUTPUT`; existing output directories are refused.
+
+`ble-session` compiles the complete production BLE observer with real kernel
+workqueues, mutexes, timers and threads. Controlled Bluetooth callbacks cover
+normal reconnect, an old running callback entering after reconnect, a new read
+arming that same work before the old callback returns, disconnect without a new
+session, and session replacement while result publication is gated. Every case
+also checks independent profile state, ignored battery polls, a latched result,
+and another ordinary reconnect. The source uses thread-context per-profile
+mutexes to keep a session through its result/cache publication; its quiet
+deadline is the only permission to consume statistics. Parking old work uses
+`K_FOREVER` rescheduling so new reads do not encounter cancellation state.
+
+`settings-view` compiles the complete OS settings adapter, selected Custom
+Settings registry/array implementation and DYA event manager on the real kernel.
+An actual cross-thread handoff churns twenty foreign elements through the
+sixteen-view pool. Override/cache reads and writes must retain the intended
+profile/key and preserve every unrelated element. The handoff never waits for
+a consumer while the caller owns the registry mutex; guarded by-key calls
+finish their lookup/use before the handoff. Serial operation, invalid enum and
+profile indices, persistence-error RAM state and retry remain controls.
+`CUSTOM_SETTINGS_MODULE` can explicitly select another inspected dependency
+checkout; otherwise the runner resolves the owner's pinned west project. This
+selection does not change its manifest or qualify another revision implicitly.
+
+These fixtures control Bluetooth peers and storage/report APIs; they establish
+kernel ownership and registry identity, not physical radio or Flash acceptance.
+
+## Review ownership and negative controls
+
+The selected Zephyr work implementation permits an already-running handler to
+finish after asynchronous cancellation. Rescheduling replaces its delayable
+timeout; `K_FOREVER` leaves no active timeout and does not enter work cancellation.
+An older invocation therefore checks the current connection, settled state and
+quiet deadline under the profile mutex before consuming data. The same mutex
+is held through classification and result/cache publication. This prevents a
+module session replacement during publication; it does not bound time spent
+waiting for persistent storage or prove physical disconnect/HID timing.
+
+The adapter's by-key functions resolve and consume the recyclable array view
+under the Custom Settings guard. `settings-view` covers that direct path.
+The separate generic Custom Settings `WriteSetting` path is dependency-owned:
+its candidate fix guards lookup, permission, conversion and mutation, retains
+the view, and rejects keyspace delete/reuse through an identity epoch. The
+Custom Settings owner's `tests/support/review_rpc_cases.inc` exercises generic
+handler view churn and request-decoded keyspace reuse; its `rpc-epoch` defect
+control belongs to that owner. These are distinct coverage boundaries.
+
+The committed OS manifests still select their recorded Custom Settings SHA.
+Do not claim a candidate dependency repair is present in that pin. Validate
+the prepared candidate explicitly with `CUSTOM_SETTINGS_MODULE` in container
+storage and record both source identities; a future dependency advance needs
+the reviewed commit, updated pins/lock and owner/integration checks. No OS test
+implicitly fetches or changes that revision.
+
+For local defect controls, prepare a fresh isolated source copy in the container
+and run `python3 tests/review_negative_control.py FAULT "$ISOLATED_OWNER"`
+from the unchanged owner. The operator rejects the authoring source. Execute
+the unchanged kernel fixture in that isolated copy, retaining all five cases
+and three runs per case:
+
+| Fault | Family and expected executable failure |
+|---|---|
+| `quiet-deadline` | `ble-session`: `early` must detect an old callback consuming the new session before its quiet deadline. |
+| `publication-lock` | `ble-session`: `publication` must detect session replacement passing the gated old publication. |
+| `borrowed-read` | `settings-view`: override/cache reads must detect wrong-view values after cross-thread pool churn. |
+| `borrowed-write` | `settings-view`: override/cache writes must detect a changed foreign element or unchanged target. |
+
+Compiler, setup and mutation-site failures are not successful defect controls.
+The optimized/ASan/UBSan policy and USB boundaries, all native snapshots, board
+profiles and Web checks remain required alongside these kernel controls.
 
 Native result admission requires every `native_sim.keymap` fixture to have a
 matching binary. `required_hooks.json` names the expected checked initialization

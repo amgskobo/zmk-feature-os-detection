@@ -29,9 +29,8 @@ change the rule order, ABI or debounce interval.
 
 The module registers a USB 2.0 Extension BOS capability with no LPM support at
 POST_KERNEL, before ZMK enables USB at APPLICATION. This makes its BOS length
-and capability count valid. The earlier malformed-BOS failure and remaining
-historical acceptance gaps are recorded in
-[the BOS postmortem](windows-usb-enumeration-issue.md).
+and capability count valid. Malformed-BOS behavior and the acceptance boundary
+are described in [the BOS note](windows-usb-enumeration-issue.md).
 
 ## BLE rules, in evaluation order
 
@@ -42,6 +41,10 @@ extend the discovery window. After settle, reads are ignored until reconnect.
 A first pairing that acquires its profile mapping after connection starts its
 profile statistics on the first relevant read.
 
+A callback already running at reconnect cannot consume the new profile's
+statistics before its own quiet deadline. Session replacement and result/cache
+publication are serialized per profile; other profiles remain independent.
+
 | Observation | Result |
 | --- | --- |
 | No Report Map, HIDS Info, PnP ID or Appearance reads | UNKNOWN |
@@ -49,9 +52,9 @@ profile statistics on the first relevant read.
 | Otherwise, Report Map and HIDS Info were read, with no Appearance read | ANDROID |
 | Other nonempty patterns | MACOS |
 
-Automatic BLE detection has no LINUX or IOS return path. The observed desktop
-Linux pattern collides with Windows, and the observed iPhone pattern falls back
-to macOS. No ANCS/AMS discovery probe is implemented. LINUX and IOS remain valid
+Automatic BLE detection has no LINUX or IOS return path. A desktop Linux read
+set can collide with Windows, and an Apple-shaped read set falls back to macOS.
+No ANCS/AMS discovery probe is implemented. LINUX and IOS remain valid
 manual profile overrides. MTU, connection interval and Report reads are recorded
 but are not classification discriminators.
 
@@ -61,24 +64,23 @@ precedence. Invalid persisted/imported enum values read as UNKNOWN without
 rewriting the imported value. Cache persistence failure, notification behavior,
 profile independence and retry are exercised separately from actual Flash.
 
-## Retained dated observations
+## Controlled pattern examples
 
-These are summaries of the original 2026-07-05 and2026-07-19 capture notes. They
-are finite observations on the original hosts and original firmware. They are
-not fresh hardware acceptance of the current checkout. The archived notes do not
-supply complete modern source/artifact identities for every run.
+These sanitized examples preserve request values and classification boundaries.
+They describe reproducible inputs, not raw capture transcripts or newly executed
+hardware results. The original individual capture records remain private.
 
-| Original observation | What it supports and what it cannot establish |
+| Request pattern | Classification boundary |
 | --- | --- |
-| Post-fix Windows USB: DEVICE 64 then 18; CONFIGURATION 255; BOS 255; STRING 255; DEVICE_QUALIFIER 10 once; reaches SET_CONFIGURATION and HID REPORT | Supports the current Windows BOS rule on that host. Earlier absent-string Windows traces were failed enumeration, not an OS signature. Actual host HID arrivals were not separately retained. |
-| Post-fix Linux USB: DEVICE 64 then 18; BOS 5 then 12; DEVICE_QUALIFIER 10 three times; CONFIGURATION 9 then 34; STRING 255 | Supports the current Linux rule. Android OTG shared the Linux enumeration pattern; trailing Android length 254 string reads were not adopted as a rule. |
-| Mac and iPhone side by side, 2026-07-19: DEVICE 8 then 18; STRING 2 then 24/34; CONFIGURATION 9 then 34; BOS 5 then 12; both send REMOTE_WAKEUP after configuration | Supports treating both as MACOS over USB. The earlier iOS split used an incomplete Mac trace and was removed. A late optional Mac string read is not an adopted discriminator. |
-| Windows BLE: Report Map, HIDS Info, PnP ID and Appearance; desktop Linux/BlueZ reads the same characteristic set | Explains the intentional WINDOWS result for this ambiguous desktop Linux pattern. Read counts and connection parameters did not establish a reliable split. |
-| Android BLE: Report Map, HIDS Info and PnP ID, with no observed Appearance read | Supports the ANDROID branch only for that finite observation. A different Linux host skipping Appearance could collide with it. |
-| Partial Mac BLE: DIS/PnP ID activity; iPhone BLE: Report Map with no HIDS Info/PnP ID/Appearance | Both use the MACOS fallback; neither establishes a unique Apple OS identity. Address privacy is not an adopted signal. |
+| Windows-like USB: DEVICE 64 then 18; CONFIGURATION 255; BOS 255; STRING 255; DEVICE_QUALIFIER 10 once; SET_CONFIGURATION and HID REPORT | BOS 255 selects WINDOWS after the Apple-string rule. Failed enumeration without strings must not become a separate signature. Enumeration does not establish host HID arrivals. |
+| Linux-like USB: DEVICE 64 then 18; BOS 5 then 12; DEVICE_QUALIFIER 10 three times; CONFIGURATION 9 then 34; STRING 255 | Selects LINUX. An Android OTG host with this shape receives the same result. Optional trailing length-254 string reads are not an adopted discriminator. |
+| Apple-shaped USB: DEVICE 8 then 18; STRING 2 then 24/34; CONFIGURATION 9 then 34; BOS 5 then 12; REMOTE_WAKEUP after configuration | Selects MACOS for either macOS or iOS. REMOTE_WAKEUP and a late optional string read do not distinguish them. |
+| Desktop BLE: Report Map, HIDS Info, PnP ID and Appearance | Selects WINDOWS, including a Linux/BlueZ host with this set. Read counts and connection parameters are not discriminators. |
+| Android-shaped BLE: Report Map, HIDS Info and PnP ID, with no Appearance read | Selects ANDROID. A different host skipping Appearance can collide with it. |
+| Other nonempty BLE: DIS/PnP ID alone, or Report Map without HIDS Info/PnP ID/Appearance | Uses the MACOS fallback without establishing a unique Apple OS identity. Address privacy is not an adopted signal. |
 
 OS versions, cached discovery, hubs/KVMs that avoid enumeration, reconnect timing
-and optional late requests can change these observations. No general classifier
+and optional late requests can change these patterns. No general classifier
 accuracy percentage is established. Manual overrides remain the way to select a
 specific BLE OS when inference is ambiguous.
 
@@ -96,16 +98,17 @@ variants and actual DYA registration. Web assertions live in `tests/web/`.
 These checks do not establish current physical enumeration, radio delivery,
 reconnect timing, persistent storage or host HID input. Follow
 [the capture procedure](hw-capture-recipe.md) when collecting fresh hardware
-evidence. No BLE publication-epoch guarantee is inferred from the host fixture;
-concurrent disconnect/settle publication requires an explicit ownership audit.
+evidence. `tests/ble-session/` separately exercises reconnect before an old
+callback's snapshot, a new debounce armed during that callback, and a concurrent
+disconnect during publication using the real kernel workqueue and mutexes.
+Its Bluetooth peers and report/cache sinks remain controlled.
 
 ## Archived superseded material
 
 The original chronological guide, including all raw request sequences, rejected
-hypotheses and dated caveats, is preserved byte-for-byte in
+hypotheses and dated caveats, is retained privately in
 `$OS_DETECTION_HISTORY_ARCHIVE`, entry
-`docs/fingerprints.md`. Its adjacent archive manifest records SHA-256 values;
-the fresh audit also retains an independently verified archive identity.
+`docs/fingerprints.md`. Its adjacent archive manifest records SHA-256 values.
 `OS_DETECTION_HISTORY_ARCHIVE` identifies the privately retained archive;
 its exact path and original identity manifest remain in local records.
 The obsolete iOS/probe rules, old fixture locations, pre-debounce BLE diagnosis

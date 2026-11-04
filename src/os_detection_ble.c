@@ -20,62 +20,32 @@
 #endif
 LOG_MODULE_REGISTER(zmk_os_detection_fork_os_detection_ble, CONFIG_ZMK_OS_DETECTION_FORK_LOG_LEVEL);
 
-/* See docs/fingerprints.md for what's real vs. placeholder here. Real
- * captures (2026-07-05: Windows, a real Linux/BlueZ desktop, and real
- * Android) found GAP Appearance is the one signal that actually splits
- * them: Windows and desktop Linux both read it, Android doesn't (even
- * though Android - like desktop Linux - reads Report Map + HIDS Info + DIS
- * PnP ID). PnP ID presence/absence, the original assumed Windows/Linux
- * split, turned out NOT to distinguish anything - all three read it.
- *
- * Unlike over USB (where Android shares desktop Linux's kernel-level USB
- * stack and is deliberately reported as ZMK_OS_LINUX, see
- * os_detection_usb.c), Android's BLE GATT read pattern IS distinguishable
- * from desktop Linux's - so it gets its own ZMK_OS_ANDROID value here
- * instead of folding into ZMK_OS_LINUX. One consequence worth knowing: with
- * only Windows/Android/iPhone real captures backing this logic,
- * `zmk_os_classify_ble()` currently has no path that returns ZMK_OS_LINUX
- * at all - a real desktop Linux capture (which reads Appearance) lands on
- * the Windows rule below instead, per the existing ambiguity decision. */
+/* Ordered BLE read-set heuristics; see docs/fingerprints.md for limitations.
+ * PnP ID plus Appearance selects WINDOWS, including an ambiguous Linux/BlueZ
+ * read set. Report Map plus HIDS Info without Appearance selects ANDROID.
+ * PnP ID alone does not identify Windows/Linux. Shared USB shapes may instead
+ * classify Android as LINUX. Automatic BLE detection has no LINUX or IOS
+ * return path; those values remain available as manual profile overrides. */
 enum zmk_os zmk_os_classify_ble(const struct ble_fp_stats *stats) {
     if (stats->report_map_reads == 0 && stats->hids_info_reads == 0 && stats->pnp_id_reads == 0 &&
         stats->appearance_reads == 0) {
         return ZMK_OS_UNKNOWN;
     }
 
-    /* Windows (VERIFIED, 2026-07-05 real capture) reads GAP Appearance in
-     * addition to DIS PnP ID and the HIDS report map. Checked first because
-     * a real Linux/BlueZ desktop capture the same day showed this exact
-     * same pattern too (see module comment) - Windows has the larger
-     * install base, so this genuinely ambiguous case deliberately resolves
-     * to Windows rather than Linux (per module owner, 2026-07-05). */
+    /* Check PnP ID plus GAP Appearance first. This ambiguous desktop read set
+     * maps to WINDOWS and cannot establish a unique Windows/Linux identity. */
     if (stats->pnp_id_reads > 0 && stats->appearance_reads > 0) {
         return ZMK_OS_WINDOWS;
     }
 
-    /* Android (VERIFIED, 2026-07-05 real capture): Report Map + HIDS Info +
-     * (usually) DIS PnP ID get read, but GAP Appearance never does - the
-     * one signal that actually separated it from the real Windows/Linux
-     * desktop captures above (both of which DO read Appearance). "No
-     * Appearance" is the real Android signal, not "no PnP ID" as originally
-     * (wrongly) assumed - see the module comment. Per module owner
-     * (2026-07-05): reported as its own ZMK_OS_ANDROID rather than folded
-     * into ZMK_OS_LINUX, since this pattern - unlike over USB - actually
-     * distinguishes it from real desktop Linux. */
+    /* Report Map plus HIDS Info without Appearance maps to ANDROID. PnP ID
+     * may be present or absent; a different host with this shape can collide. */
     if (stats->report_map_reads > 0 && stats->hids_info_reads > 0 && stats->appearance_reads == 0) {
         return ZMK_OS_ANDROID;
     }
 
-    /* Fallback: some HIDS access happened but didn't match a clearer
-     * pattern above. This is also where real iOS lands today (VERIFIED,
-     * 2026-07-05 real iPhone capture: only HIDS Report Map was read, same
-     * as macOS): no BLE signal here tells iOS from macOS (an ANCS/AMS GATT
-     * client probe was planned but never implemented, see
-     * docs/fingerprints.md). Defaulting this ambiguous case
-     * to macOS rather than iOS is deliberate (per module owner, 2026-07-05):
-     * same reasoning as defaulting the Windows/Linux ambiguity to Windows -
-     * pick the platform value more likely to be right/more common when the
-     * signals genuinely can't tell them apart. */
+    /* Any other nonempty read set maps to MACOS, including Report Map alone.
+     * No ANCS/AMS client probe distinguishes macOS from iOS here. */
     return ZMK_OS_MACOS;
 }
 
@@ -89,26 +59,31 @@ static struct ble_fp_stats profile_stats[ZMK_BLE_PROFILE_COUNT];
  * are ignored until the profile reconnects (which clears the latch). */
 struct ble_profile_settle {
     struct k_work_delayable work;
+    struct k_mutex lock;
     /* The connection the stats belong to (compared, never dereferenced). A
      * first pairing only maps to its profile once pairing completes, after
      * the connected callback, so its first read starts the profile afresh. */
     const struct bt_conn *conn;
     uint8_t profile_index;
     bool settled;
+    int64_t deadline;
 };
 
 static struct ble_profile_settle profile_settle[ZMK_BLE_PROFILE_COUNT];
 
-/* profile_stats, `conn` and `settled` are written on the Bluetooth thread
- * (GATT reads, connection callbacks) and read by the settle work on the
- * system work queue. */
-static struct k_spinlock stats_lock;
+/* Bluetooth callbacks and settle work run in thread context. The per-profile
+ * mutex covers classification/publication too: a disconnect cannot replace a
+ * session between its snapshot and the corresponding cache/report update. */
 
-/* Starts a profile's fingerprint afresh for `conn`. Call with stats_lock held. */
+/* Starts a profile afresh. Call with its mutex held. */
 static void start_profile_locked(int profile_index, const struct bt_conn *conn, uint16_t interval) {
+    /* Park queued work without CANCELING a running callback. A new read may
+     * rearm this same work before that old callback returns. */
+    k_work_reschedule(&profile_settle[profile_index].work, K_FOREVER);
     profile_stats[profile_index] = (struct ble_fp_stats){.initial_conn_interval = interval};
     profile_settle[profile_index].conn = conn;
     profile_settle[profile_index].settled = false;
+    profile_settle[profile_index].deadline = 0;
 }
 
 static int profile_index_for_conn(struct bt_conn *conn) {
@@ -123,11 +98,25 @@ static void ble_settle_work_handler(struct k_work *work) {
     struct ble_profile_settle *settle = CONTAINER_OF(dwork, struct ble_profile_settle, work);
     uint8_t profile_index = settle->profile_index;
 
-    /* Latch first: any read arriving after this is ignored until reconnect. */
-    k_spinlock_key_t key = k_spin_lock(&stats_lock);
+    k_mutex_lock(&settle->lock, K_FOREVER);
+    if (!settle->conn || settle->settled || settle->deadline == 0) {
+        k_mutex_unlock(&settle->lock);
+        return;
+    }
+    int64_t remaining = settle->deadline - k_uptime_get();
+    if (remaining > 0) {
+        /* This may be an already-running callback from an earlier session or
+         * an earlier read. Only the current quiet deadline may consume stats. */
+        k_work_reschedule(dwork, K_MSEC(remaining));
+        k_mutex_unlock(&settle->lock);
+        return;
+    }
+
+    /* Latch first: later reads are ignored until reconnect. Keep ownership
+     * through publication so old results cannot land in a replacement session. */
     settle->settled = true;
+    settle->deadline = 0;
     struct ble_fp_stats stats = profile_stats[profile_index];
-    k_spin_unlock(&stats_lock, key);
 
     enum zmk_os detected = zmk_os_classify_ble(&stats);
     LOG_DBG("os detection: BLE fingerprint stats profile=%d report_map=%u hids_info=%u "
@@ -136,6 +125,7 @@ static void ble_settle_work_handler(struct k_work *work) {
             stats.pnp_id_reads, stats.appearance_reads, stats.att_mtu, stats.initial_conn_interval,
             detected);
     zmk_os_detection_report_ble_detected(profile_index, detected);
+    k_mutex_unlock(&settle->lock);
 }
 
 static bool os_detection_ble_read_authorize(struct bt_conn *conn, const struct bt_gatt_attr *attr) {
@@ -164,22 +154,22 @@ static bool os_detection_ble_read_authorize(struct bt_conn *conn, const struct b
 
     /* Once the fingerprint is finalized for this connection, reads are
      * ignored until the profile reconnects. */
-    k_spinlock_key_t key = k_spin_lock(&stats_lock);
-    if (profile_settle[profile_index].conn != conn) {
+    struct ble_profile_settle *settle = &profile_settle[profile_index];
+    k_mutex_lock(&settle->lock, K_FOREVER);
+    if (settle->conn != conn) {
         start_profile_locked(profile_index, conn, 0);
     }
-    bool counted = !profile_settle[profile_index].settled;
+    bool counted = !settle->settled;
     if (counted && *counter < UINT8_MAX) {
         (*counter)++;
     }
-    k_spin_unlock(&stats_lock, key);
-
     /* Classify once the discovery burst goes quiet (see ble_settle_work_handler),
      * rather than re-running it on every read as fingerprint signals trickle in. */
     if (counted) {
-        k_work_reschedule(&profile_settle[profile_index].work,
-                          K_MSEC(CONFIG_ZMK_OS_DETECTION_BLE_SETTLE_MS));
+        settle->deadline = k_uptime_get() + CONFIG_ZMK_OS_DETECTION_BLE_SETTLE_MS;
+        k_work_reschedule(&settle->work, K_MSEC(CONFIG_ZMK_OS_DETECTION_BLE_SETTLE_MS));
     }
+    k_mutex_unlock(&settle->lock);
     return true;
 }
 
@@ -193,9 +183,12 @@ static void os_detection_att_mtu_updated(struct bt_conn *conn, uint16_t tx, uint
     if (profile_index < 0 || profile_index >= ZMK_BLE_PROFILE_COUNT) {
         return;
     }
-    k_spinlock_key_t key = k_spin_lock(&stats_lock);
-    profile_stats[profile_index].att_mtu = rx;
-    k_spin_unlock(&stats_lock, key);
+    struct ble_profile_settle *settle = &profile_settle[profile_index];
+    k_mutex_lock(&settle->lock, K_FOREVER);
+    if (settle->conn == conn) {
+        profile_stats[profile_index].att_mtu = rx;
+    }
+    k_mutex_unlock(&settle->lock);
 }
 
 static struct bt_gatt_cb os_detection_gatt_cb = {
@@ -210,13 +203,12 @@ static void os_detection_conn_connected(struct bt_conn *conn, uint8_t err) {
     if (profile_index < 0 || profile_index >= ZMK_BLE_PROFILE_COUNT) {
         return;
     }
-    k_work_cancel_delayable(&profile_settle[profile_index].work);
     struct bt_conn_info info;
     bool have_info = bt_conn_get_info(conn, &info) == 0 && info.type == BT_CONN_TYPE_LE;
 
-    k_spinlock_key_t key = k_spin_lock(&stats_lock);
+    struct ble_profile_settle *settle = &profile_settle[profile_index];
+    k_mutex_lock(&settle->lock, K_FOREVER);
     start_profile_locked(profile_index, conn, have_info ? info.le.interval : 0);
-    k_spin_unlock(&stats_lock, key);
 
 #if IS_ENABLED(CONFIG_ZMK_CUSTOM_SETTINGS)
     /* Adopt the cached guess immediately; re-detection above will correct
@@ -226,6 +218,7 @@ static void os_detection_conn_connected(struct bt_conn *conn, uint8_t err) {
         zmk_os_detection_adopt_ble_cached(profile_index, cached);
     }
 #endif
+    k_mutex_unlock(&settle->lock);
 }
 
 static void os_detection_conn_param_updated(struct bt_conn *conn, uint16_t interval,
@@ -236,11 +229,12 @@ static void os_detection_conn_param_updated(struct bt_conn *conn, uint16_t inter
     if (profile_index < 0 || profile_index >= ZMK_BLE_PROFILE_COUNT) {
         return;
     }
-    k_spinlock_key_t key = k_spin_lock(&stats_lock);
-    if (profile_stats[profile_index].initial_conn_interval == 0) {
+    struct ble_profile_settle *settle = &profile_settle[profile_index];
+    k_mutex_lock(&settle->lock, K_FOREVER);
+    if (settle->conn == conn && profile_stats[profile_index].initial_conn_interval == 0) {
         profile_stats[profile_index].initial_conn_interval = interval;
     }
-    k_spin_unlock(&stats_lock, key);
+    k_mutex_unlock(&settle->lock);
 }
 
 static void os_detection_conn_disconnected(struct bt_conn *conn, uint8_t reason) {
@@ -249,15 +243,14 @@ static void os_detection_conn_disconnected(struct bt_conn *conn, uint8_t reason)
      * maps to its profile, and Zephyr reuses connection objects. Drop any
      * pending settle so it can't fire against a disconnected profile. */
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
-        k_spinlock_key_t key = k_spin_lock(&stats_lock);
-        bool owned = profile_settle[i].conn == conn;
-        if (owned) {
-            profile_settle[i].conn = NULL;
+        struct ble_profile_settle *settle = &profile_settle[i];
+        k_mutex_lock(&settle->lock, K_FOREVER);
+        if (settle->conn == conn) {
+            settle->conn = NULL;
+            settle->deadline = 0;
+            k_work_reschedule(&settle->work, K_FOREVER);
         }
-        k_spin_unlock(&stats_lock, key);
-        if (owned) {
-            k_work_cancel_delayable(&profile_settle[i].work);
-        }
+        k_mutex_unlock(&settle->lock);
     }
 }
 
@@ -270,6 +263,7 @@ static struct bt_conn_cb os_detection_conn_cb = {
 static int os_detection_ble_init(void) {
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         profile_settle[i].profile_index = (uint8_t)i;
+        k_mutex_init(&profile_settle[i].lock);
         k_work_init_delayable(&profile_settle[i].work, ble_settle_work_handler);
     }
     /* Zephyr takes a single GATT authorization callback; without it no

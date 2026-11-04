@@ -1,9 +1,8 @@
 # Collecting fresh host fingerprint evidence
 
 Start from the current [rules and evidence limits](fingerprints.md) and
-[owner test contract](../tests/README.md). The historical July rig commands are
-archived; its partition offsets, old dependency paths, debug addresses and
-cache-cleanup workarounds are not current build instructions.
+[owner test contract](../tests/README.md). Local partition offsets, dependency
+paths, debug addresses and cache-cleanup workarounds are not project defaults.
 
 ## Identify the selected build and host
 
@@ -25,8 +24,8 @@ For USB, retain the raw ordered SETUP transactions from a real host USB capture
 or an independently reviewed device capture. Include descriptor type/index,
 direction, wLength, response lengths/content where needed, SET_ADDRESS,
 SET_CONFIGURATION and the post-configuration window. Capture through late
-REMOTE_WAKEUP and optional string requests; stopping at configuration previously
-created a false Mac/iPhone distinction. Inspect the actual BOS bytes as well as
+REMOTE_WAKEUP and optional string requests; stopping at configuration can omit
+evidence needed to assess an Apple-pattern distinction. Inspect the actual BOS bytes as well as
 whether enumeration completes.
 
 For BLE, retain the ordered relevant GATT reads, discovery/cache conditions,
@@ -56,8 +55,8 @@ reset behavior are separate outcomes. Mark each PASS, FAIL, BLOCKED or NOT RUN
 using its own evidence. Existing historical observations are not fresh evidence
 for a changed source/artifact/configuration.
 
-The complete old rig procedure is preserved byte-for-byte in
+Superseded local procedures are retained privately in
 `$OS_DETECTION_HISTORY_ARCHIVE`, entry
 `docs/hw-capture-recipe.md`, with SHA-256 in the archive manifest. It includes the
-original direct-flash partition workaround and debug-memory operations for
-historical review; no current test depends on those commands.
+original partition workarounds and debug-memory operations for local review;
+no current test depends on those commands.

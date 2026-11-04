@@ -99,6 +99,31 @@ class WestCommandsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.count("USB observation boundary: PASS"), 2)
 
+    def _test_kernel_boundary(self, family):
+        result = subprocess.run(
+            [
+                "python3",
+                "tests/kernel_boundary.py",
+                family,
+                "--output",
+                str(self.BUILD_DIR / family),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=THIS_DIR,
+        )
+        (self.BUILD_DIR / (family + ".log")).write_text(result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count(" PASS\n"), 15)
+
+    @unittest.skipUnless(platform.system() == "Linux", "kernel checks require Linux")
+    def test_ble_session_boundaries(self):
+        self._test_kernel_boundary("ble-session")
+
+    @unittest.skipUnless(platform.system() == "Linux", "kernel checks require Linux")
+    def test_settings_view_boundaries(self):
+        self._test_kernel_boundary("settings-view")
+
     def test_zmk_build(self):
         self._test_zmk_build(
             {

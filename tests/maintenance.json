@@ -20,6 +20,8 @@
     "Physical USB/BLE/split delivery, timing, power and retention require matching production-board evidence."
   ],
   "native_verification": "tests/native_verifier.py: actual exit, registered test completion, raw ordered logs, unchanged snapshots, identical binary repeated three times.",
+  "review_negative_controls": "tests/review_negative_control.py: quiet-deadline and publication-lock exercise the real-kernel BLE family; borrowed-read and borrowed-write exercise the real-registry settings-view family. Retain all five cases and three repetitions; compiler/setup failures are not detection.",
+  "shared_settings_boundary": "OS direct by-key access is covered here. Generic WriteSetting identity is dependency-owned; explicitly stage the inspected Custom Settings candidate and its owner controls before advancing the still-recorded committed pin.",
   "regression_fixtures": [
     {
       "fixture": "tests/override-boundary/harness.c",
@@ -28,6 +30,14 @@
     {
       "fixture": "tests/usb-boundary/harness.c",
       "contract": "Complete production USB observer/classifier: all four presence counters saturate across 65535/65536/longer valid reads; ignored requests add no evidence or debounce; reset and independent Apple/Linux/Windows classifications remain exact under optimization and ASan/UBSan."
+    },
+    {
+      "fixture": "tests/ble-session/main.c",
+      "contract": "Complete production BLE observer on real kernel workqueues/mutexes/threads: five normal/old-work/new-debounce/publication/disconnected cases, independent profile and recovery controls, same binary three fresh-process repeats per case."
+    },
+    {
+      "fixture": "tests/settings-view/main.c",
+      "contract": "Actual selected registry/array pool, production OS adapter and kernel handoff: five serial/override/cache read/write cases, twenty foreign lookups against sixteen pooled views, identity/error/retry controls, three repeats per case."
     }
   ]
 }

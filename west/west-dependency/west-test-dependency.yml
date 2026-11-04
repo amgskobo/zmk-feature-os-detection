@@ -20,11 +20,11 @@ manifest:
     # verification easier (switch/unpair BLE profiles from a web UI instead
     # of key combos) - not a functional dependency of this module.
     - name: zmk-module-ble-management
-      remote: cormoran
-      revision: 57738cc4fc6ba80e82a7ac57741a0339cb186cd4
+      url: https://github.com/amgskobo/zmk-module-ble-management
+      revision: f7216896fbbd540e169b124bc505658fc057834b
     - name: zmk-feature-custom-settings
       url: https://github.com/amgskobo/zmk-feature-custom-settings
-      revision: b91a8ceb0a57a0cf41b34270752d79463e2848fa
+      revision: c4071b095c3007d1deb055c609603ca9b5897d14
     - name: zephyr
       remote: zmkfirmware
       revision: 10ba6d0cb38bc3d258775d27982f707599320085

@@ -26,13 +26,14 @@ headers = {
 #define ARG_UNUSED(x) (void)(x)
 #define CONTAINER_OF(ptr, type, field) ((type *)((char *)(ptr) - offsetof(type, field)))
 #define K_MSEC(ms) (ms)
+#define K_FOREVER (-1)
 #define CONFIG_APPLICATION_INIT_PRIORITY 90
 #define SYS_INIT(fn, level, prio) \
     static int (*const fn##_init_ref)(void) __attribute__((unused)) = fn
 struct k_work { void (*handler)(struct k_work *); };
 #define K_WORK_DEFINE(name, h) struct k_work name = {.handler = (h)}
 int k_work_submit(struct k_work *work);
-struct k_work_delayable { struct k_work work; bool pending; };
+struct k_work_delayable { struct k_work work; bool pending; int64_t due; };
 void k_work_init_delayable(struct k_work_delayable *dwork, void (*handler)(struct k_work *));
 int k_work_reschedule(struct k_work_delayable *dwork, int delay_ms);
 int k_work_cancel_delayable(struct k_work_delayable *dwork);
@@ -41,6 +42,11 @@ struct k_spinlock { int depth; };
 typedef int k_spinlock_key_t;
 k_spinlock_key_t k_spin_lock(struct k_spinlock *lock);
 void k_spin_unlock(struct k_spinlock *lock, k_spinlock_key_t key);
+struct k_mutex { int depth; };
+int k_mutex_init(struct k_mutex *mutex);
+int k_mutex_lock(struct k_mutex *mutex, int timeout);
+int k_mutex_unlock(struct k_mutex *mutex);
+int64_t k_uptime_get(void);
 """,
     "zephyr/sys/util.h": "#include <zephyr/kernel.h>\n",
     "zephyr/logging/log.h": """#pragma once
@@ -134,6 +140,8 @@ struct zmk_custom_setting_value { int type; int32_t int32_value; };
 const struct zmk_custom_setting *zmk_custom_setting_find_array_element(const char *,const char *,uint32_t);
 int zmk_custom_setting_read(const struct zmk_custom_setting *,struct zmk_custom_setting_value *);
 int zmk_custom_setting_write(const struct zmk_custom_setting *,const struct zmk_custom_setting_value *,enum zmk_custom_setting_write_mode);
+int zmk_custom_setting_read_array_by_key(const char *, const char *, uint32_t, struct zmk_custom_setting_value *);
+int zmk_custom_setting_write_array_by_key(const char *, const char *, uint32_t, const struct zmk_custom_setting_value *, enum zmk_custom_setting_write_mode);
 """,
     "zmk/studio/core.h": """#pragma once
 enum zmk_studio_core_lock_state {
