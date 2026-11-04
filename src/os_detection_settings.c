@@ -22,8 +22,8 @@
  * descriptor per element) with a single ZMK_CUSTOM_SETTING_ARRAY_DEFINE that
  * owns one contiguous backing buffer for the whole array - so we register the
  * two arrays once here instead of expanding a per-index macro in a #if ladder.
- * The elements are still reached individually with
- * zmk_custom_setting_find_array_element() below.
+ * Resolve and consume each element with the guarded by-key helpers. Array
+ * element views are borrowed from a recyclable pool, not stable handles.
  *
  * The defaults array is a plain pointer (not a compound literal) and both
  * arrays share it since every element defaults to ZMK_OS_UNKNOWN; it is sized
@@ -61,17 +61,10 @@ ZMK_CUSTOM_SETTING_ARRAY_DEFINE(os_detection_ble_override, OS_DETECTION_SUBSYSTE
                                 ZMK_CUSTOM_SETTING_PERMISSION_SECURE,
                                 ZMK_CUSTOM_SETTING_NO_CONSTRAINT);
 
-static const struct zmk_custom_setting *find_setting(const char *key, uint8_t profile_index) {
-    return zmk_custom_setting_find_array_element(OS_DETECTION_SUBSYSTEM_ID, key, profile_index);
-}
-
 static enum zmk_os read_setting(const char *key, uint8_t profile_index) {
-    const struct zmk_custom_setting *setting = find_setting(key, profile_index);
-    if (!setting) {
-        return ZMK_OS_UNKNOWN;
-    }
     struct zmk_custom_setting_value value;
-    if (zmk_custom_setting_read(setting, &value) != 0) {
+    if (zmk_custom_setting_read_array_by_key(OS_DETECTION_SUBSYSTEM_ID, key, profile_index,
+                                             &value) != 0) {
         return ZMK_OS_UNKNOWN;
     }
     /* Stored/imported array elements can bypass the OS-specific RPC setter.
@@ -85,11 +78,9 @@ static enum zmk_os read_setting(const char *key, uint8_t profile_index) {
 
 static int write_setting(const char *key, uint8_t profile_index, enum zmk_os os,
                          enum zmk_custom_setting_write_mode mode) {
-    const struct zmk_custom_setting *setting = find_setting(key, profile_index);
-    if (!setting) {
-        return -ENODEV;
-    }
-    return zmk_custom_setting_write(setting, &ZMK_CUSTOM_SETTING_VALUE_INT32(os), mode);
+    int ret = zmk_custom_setting_write_array_by_key(OS_DETECTION_SUBSYSTEM_ID, key, profile_index,
+                                                    &ZMK_CUSTOM_SETTING_VALUE_INT32(os), mode);
+    return ret == -ENOENT ? -ENODEV : ret;
 }
 
 enum zmk_os zmk_os_detection_settings_get_override(uint8_t profile_index) {

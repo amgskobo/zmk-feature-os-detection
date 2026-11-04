@@ -1,0 +1,12 @@
+/ {
+    fixture_none: fixture_none {
+        compatible = "zmk,behavior-none";
+        #binding-cells = <0>;
+    };
+    keymap {
+        compatible = "zmk,keymap";
+        base_layer {
+            bindings = <&fixture_none>;
+        };
+    };
+};

@@ -9,7 +9,7 @@ Keep the module's documented imports enabled where required. The original
 upstream installation examples below describe the upstream repository.
 
 The dependency manifests select the available Custom Settings revision
-`b91a8ceb0a57a0cf41b34270752d79463e2848fa` from its reviewed fork;
+`c4071b095c3007d1deb055c609603ca9b5897d14` from its reviewed fork;
 production imports and isolated tests use the same registry implementation.
 
 ![ZMK Version](https://img.shields.io/badge/ZMK-cormoran%20fork-blue)
@@ -46,9 +46,9 @@ source code.
   `zmk_os_detection_current()` and the `zmk_os_changed` event report.
 
 **Read [docs/fingerprints.md](docs/fingerprints.md) before relying on this
-in production.** The rules follow the finite dated USB/BLE observations in
-that guide. Those captures establish the observed patterns on their original
-hosts, rather than general accuracy across OS versions or current firmware.
+in production.** That guide defines the ordered USB/BLE rules, controlled
+fixture patterns and verification limits. They do not establish general
+accuracy across OS versions or physical acceptance of current firmware.
 Manual BLE overrides remain necessary for ambiguous hosts.
 
 ## Installing
@@ -156,40 +156,30 @@ Pages automatically (see `.github/workflows/web-ui.yml`).
 
 ## Known limitations
 
-- **Fixed 2026-07-05: enabling `CONFIG_ZMK_OS_DETECTION_USB` used to break
-  Windows enumeration entirely.** Selecting `CONFIG_USB_DEVICE_BOS` bumped
-  `bcdUSB` to 2.01 without this module ever registering a valid BOS
-  capability, so the device answered `GET_DESCRIPTOR(BOS)` with a
-  spec-invalid, zero-length descriptor — real Windows aborted enumeration
-  on it (retried 3 times, never showed up as a keyboard), while Linux/macOS
-  tolerated it and worked fine. If you're on a version older than this fix,
-  update. See [docs/fingerprints.md](docs/fingerprints.md)'s "Windows
-  enumeration failure discovered and fixed" section and
+- **USB detection requires a valid BOS capability.** With
+  `CONFIG_USB_DEVICE_BOS`, `bcdUSB` 2.01 advertises BOS support. A response
+  with `wTotalLength=0` is shorter than the 5-byte header and invalid; failure
+  to reach configuration cannot establish an OS signature. The module
+  registers its USB 2.0 Extension capability before USB initialization.
+  Use a revision containing that registration. See
+  [docs/fingerprints.md](docs/fingerprints.md) and
   [docs/windows-usb-enumeration-issue.md](docs/windows-usb-enumeration-issue.md)
   for the full root-cause writeup.
 - **USB fingerprints are OS-version-dependent.** The `wLength` pattern a
   given Windows/macOS/Linux version requests can change between OS
   releases; treat the classifier as a best-effort guess, not a guarantee.
-- **Any OS sharing the Linux kernel's USB host stack enumerates like
-  Linux over USB and is reported as `ZMK_OS_LINUX`** — ChromeOS, and (real
-  capture, 2026-07-05) Android in USB-host/OTG mode too, whose kernel-level
-  enumeration was byte-for-byte identical to desktop Linux's. There's no
-  separate ChromeOS value in `enum zmk_os` - this is by design, not a gap to
-  fill. **Android is the exception over BLE specifically**: its GATT read
-  pattern (real capture, 2026-07-05) turned out to actually differ from
-  desktop Linux's (it never reads GAP Appearance), so `ZMK_OS_ANDROID` is a
-  distinct value reachable only via BLE detection, not USB.
+- **Shared USB request patterns produce the same OS value.** A Linux-shaped
+  pattern maps to `ZMK_OS_LINUX`, including a ChromeOS or Android USB-host/OTG
+  connection that uses that shape. There is no separate ChromeOS value in
+  `enum zmk_os`. `ZMK_OS_ANDROID` is an automatic BLE result only: Report Map
+  and HIDS Info without GAP Appearance match that branch. It is a heuristic,
+  not proof that another host cannot produce the same read set.
 - **macOS and iOS are NOT distinguished over USB; both report `ZMK_OS_MACOS`.**
-  A 2026-07-19 side-by-side capture of a real Mac and a real iPhone (see
-  [docs/fingerprints.md](docs/fingerprints.md)) found their USB enumeration
-  byte-for-byte identical — they share Apple's USB stack. An earlier revision
-  split iOS out because a real iPhone sent `SET_FEATURE(DEVICE_REMOTE_WAKEUP)`,
-  but the real Mac sends it too (the earlier macOS capture had just stopped one
-  packet too early), so a Mac was being misdetected as iOS; that heuristic was
-  removed. This is the same "shared stack ⇒ can't tell apart over USB" situation
-  as ChromeOS/Android above. BLE also reports the observed Apple patterns as
-  macOS. No ANCS/AMS probe is implemented; `ZMK_OS_IOS` remains available for a
-  manual BLE profile override.
+  The short-string-probe/full-read shape maps to MACOS.
+  `SET_FEATURE(DEVICE_REMOTE_WAKEUP)`, including after configuration, does not
+  split iOS from macOS. BLE also uses MACOS as its nonempty fallback. No
+  ANCS/AMS probe is implemented; `ZMK_OS_IOS` remains available as a manual
+  BLE profile override. See [the rule contract](docs/fingerprints.md).
 - **KVM switches and some USB hubs don't force re-enumeration** on switch,
   so USB detection can miss a host change until the next physical
   reconnect.
@@ -206,35 +196,21 @@ Pages automatically (see `.github/workflows/web-ui.yml`).
   do not restart that timer. Debouncing reduces transient guesses; it does
   not resolve ambiguous fingerprints. Treat the per-profile manual override
   as the reliable way to select an OS value when automatic inference is wrong.
-- **BLE cannot reliably distinguish Windows from Linux.** Real captures
-  (2026-07-05, both a real Windows PC and this project's own Linux
-  dev host's BlueZ) read the *identical* set of GATT characteristics -
-  the "Linux skips DIS PnP ID/GAP Appearance" assumption doesn't hold for
-  at least one real, current BlueZ version. Since there's no reliable
-  read-set signal to split them, `zmk_os_classify_ble()` deliberately
-  resolves this ambiguous case to `ZMK_OS_WINDOWS` (larger install base) -
-  Linux users hitting this should use the Web UI's manual per-profile
-  override. See the retained dated observations in
-  [docs/fingerprints.md](docs/fingerprints.md) for the finite data and ambiguity.
+- **BLE cannot reliably distinguish Windows from Linux.** PnP ID plus GAP
+  Appearance maps to `ZMK_OS_WINDOWS`; a Linux/BlueZ host with that read set
+  receives the same value. PnP ID presence alone is not a discriminator.
+  Use the manual per-profile override when inference is ambiguous. See
+  [the rule contract](docs/fingerprints.md).
 - **Custom Studio RPC is an unofficial protocol** and requires the
   `cormoran/zmk` fork (`main+custom-studio-protocol`) rather than upstream
   ZMK.
 - **Split keyboards**: detection only runs on the central side, since only
   the central owns the USB/BLE host connection.
-- USB detection is verified against real captures for macOS, Windows, and
-  Linux (2026-07-05), plus Android confirmed to enumerate identically to Linux
-  and a real Mac + iPhone confirmed to enumerate identically to each other
-  (both report macOS) on 2026-07-19. BLE detection is verified against real
-  captures for
-  Windows, Linux (see above - resolves to Windows on purpose), Android
-  (reported distinctly as `ZMK_OS_ANDROID`), and (partially - DIS/HIDS
-  Report Map only) macOS and iPhone, also 2026-07-05.
-- **BLE cannot distinguish iOS from macOS either.** A real iPhone capture
-  read only the HIDS Report Map, matching the fallback rule that also
-  covers macOS - `ZMK_OS_IOS` is never produced by a real BLE capture today
-  (an ANCS/AMS GATT client probe was planned to detect it; its
-  never-implemented Kconfig stub has been removed). See the current BLE rules and dated observations in
-  [docs/fingerprints.md](docs/fingerprints.md), and the separate current
+- **BLE cannot distinguish iOS from macOS either.** Report Map alone reaches
+  the MACOS fallback, and automatic classification has no IOS return path.
+  The controlled software fixtures exercise these rules without establishing
+  physical USB/BLE accuracy or host HID delivery. See the current BLE rules in
+  [docs/fingerprints.md](docs/fingerprints.md) and the separate
   [capture procedure](docs/hw-capture-recipe.md).
 
 ## Development
@@ -248,6 +224,13 @@ is retained, and the changed RAM value still raises one local OS event.
 Unchanged values and invalid requests do not raise another event. Existing
 native classifier/registration fixtures and real transport/NVS acceptance
 remain separate.
+
+The complete owner entry also runs the kernel session and array-view cases in
+`tests/ble-session/` and `tests/settings-view/`. They check reconnect while old
+settle work is running, result publication, and override/cache identity during
+cross-thread registry activity. Each case runs three times; see
+[the owner contract](tests/README.md) for selected dependencies and evidence
+limits.
 
 ### Setup
 
@@ -270,15 +253,11 @@ pre-commit run --all-files
 ```
 
 If the `prettier`/`eslint`/`jest`/`web-build` hooks fail with `Error:
-Cannot find module 'node:path'`, pre-commit's own managed Node environment
-picked up a stale/wrong Node install for its bootstrap - this was seen
-intermittently in this project's original dev sandbox (which has more than
-one Node on `PATH`) after switching between running `pre-commit` inside a
-nix devshell and outside it, but disappeared for good after `rm -rf
-~/.cache/pre-commit` followed by one clean `pre-commit run --all-files`
-(the corrupted/mismatched cache was the actual cause, not a fundamental
-environment conflict - don't reach for a permanent `SKIP=` workaround for
-this).
+Cannot find module 'node:path'`, inspect the selected Node version, `PATH`
+and the hook's managed environment. Prepare a compatible isolated container
+environment and a fresh selected cache before retrying
+`pre-commit run --all-files`. Do not bypass required checks with a permanent
+`SKIP=` workaround or delete an unrelated shared cache.
 
 ### Tests
 
@@ -296,15 +275,15 @@ cd web && npm test
 ### Manual real-hardware verification
 
 The current software matrix covers classifier, protocol, feature/role and Web
-boundaries. Dated host observations are summarized in
-[the fingerprint guide](docs/fingerprints.md); they do not establish physical
-acceptance of a changed checkout or artifact.
+boundaries. [The fingerprint guide](docs/fingerprints.md) describes the rule
+contract and controlled patterns; physical acceptance of a changed checkout
+or artifact requires matching device evidence.
 
 Follow [the current capture procedure](docs/hw-capture-recipe.md) for selected
 source/configuration/artifact identity, ordered USB/GATT evidence and separate
 host HID/override-persistence results. Current production debug logs contain
-settled statistics, not a complete per-packet trace. The old July rig commands,
-partition offsets and unlocked sample firmware instructions are archived.
+settled statistics, not a complete per-packet trace. Superseded local procedures
+remain in the private history archive rather than active build instructions.
 
 ### Sync changes from template
 

@@ -101,12 +101,26 @@ void k_spin_unlock(struct k_spinlock *lock, k_spinlock_key_t key) {
     (void)key;
     CHECK(--lock->depth == 0);
 }
+int k_mutex_init(struct k_mutex *mutex) {
+    mutex->depth = 0;
+    return 0;
+}
+int k_mutex_lock(struct k_mutex *mutex, int timeout) {
+    CHECK(timeout == K_FOREVER && mutex->depth++ == 0);
+    return 0;
+}
+int k_mutex_unlock(struct k_mutex *mutex) {
+    CHECK(--mutex->depth == 0);
+    return 0;
+}
+static int64_t now;
+int64_t k_uptime_get(void) { return now; }
 void k_work_init_delayable(struct k_work_delayable *dwork, void (*handler)(struct k_work *)) {
     *dwork = (struct k_work_delayable){.work.handler = handler};
 }
 int k_work_reschedule(struct k_work_delayable *dwork, int delay_ms) {
-    (void)delay_ms;
-    dwork->pending = true;
+    dwork->pending = delay_ms != K_FOREVER;
+    dwork->due = now + delay_ms;
     return 0;
 }
 int k_work_cancel_delayable(struct k_work_delayable *dwork) {
@@ -123,6 +137,11 @@ static void gatt_read(struct bt_conn *conn, const struct bt_uuid *uuid) {
 /* Lets every armed BLE settle debounce expire. */
 static unsigned settle_due(void) {
     unsigned fired = 0;
+    for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        if (profile_settle[i].work.pending && profile_settle[i].work.due > now) {
+            now = profile_settle[i].work.due;
+        }
+    }
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         if (profile_settle[i].work.pending) {
             profile_settle[i].work.pending = false;
@@ -148,7 +167,21 @@ int zmk_custom_setting_write(const struct zmk_custom_setting *setting,
     /* Matches the selected Custom Settings owner's tested RAM-before-save policy. */
     return persist_error;
 }
+int zmk_custom_setting_read_array_by_key(const char *subsystem, const char *key, uint32_t index,
+                                         struct zmk_custom_setting_value *out) {
+    const struct zmk_custom_setting *setting =
+        zmk_custom_setting_find_array_element(subsystem, key, index);
+    return setting ? zmk_custom_setting_read(setting, out) : -ENOENT;
+}
+int zmk_custom_setting_write_array_by_key(const char *subsystem, const char *key, uint32_t index,
+                                          const struct zmk_custom_setting_value *value,
+                                          enum zmk_custom_setting_write_mode mode) {
+    const struct zmk_custom_setting *setting =
+        zmk_custom_setting_find_array_element(subsystem, key, index);
+    return setting ? zmk_custom_setting_write(setting, value, mode) : -ENOENT;
+}
 static void reset(void) {
+    now = 0;
     memset(values, 0, sizeof(values));
     memset(ble_detected, 0, sizeof(ble_detected));
     usb_detected = ZMK_OS_UNKNOWN;
