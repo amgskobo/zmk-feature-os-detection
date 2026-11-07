@@ -5,8 +5,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from native_verifier import verify_native
+from kernel_boundary import kernel_result_passed
 
 
 class NativeVerifierContract(unittest.TestCase):
@@ -33,10 +35,18 @@ class NativeVerifierContract(unittest.TestCase):
         self.binary = binary_dir / "zmk.exe"
 
     def compile(
-        self, *, hook=True, reported=0, process_exit=0, fatal=False, failed_log=False
+        self,
+        *,
+        hook=True,
+        reported=0,
+        process_exit=0,
+        fatal=False,
+        failed_log=False,
+        recovering=None,
+        benign=False,
     ):
         source = self.root / "program.c"
-        body = "#include <stdio.h>\n"
+        body = "#include <stdio.h>\n#include <stdlib.h>\n"
         if hook:
             body += (
                 "int owner_checked_control(void) { "
@@ -49,8 +59,36 @@ class NativeVerifierContract(unittest.TestCase):
             body += 'puts("ASSERTION FAIL"); '
         if failed_log:
             body += 'puts("<err> owner: FAIL: controlled assertion"); '
+        if recovering == "address":
+            body += (
+                "volatile char *bytes = malloc(1); "
+                "volatile unsigned offset = 1; bytes[offset] = 1; free((void *)bytes); "
+            )
+        elif recovering == "undefined":
+            body += (
+                "volatile unsigned shift = 31; "
+                "volatile int value = 1 << shift; (void)value; "
+            )
+        if benign:
+            body += (
+                'puts("fixture=AddressSanitizer_profile CONFIG_UBSAN=y"); '
+                'puts("UndefinedBehaviorSanitizer is configured"); '
+                'puts("runtime error: is a label without a source location"); '
+            )
         body += f'puts("EVENT 1"); return {process_exit}; }}\n'
         source.write_text(body)
+        options = (
+            [
+                "-g",
+                "-O1",
+                "-fno-pie",
+                "-no-pie",
+                "-fsanitize=" + recovering,
+                "-fsanitize-recover=all",
+            ]
+            if recovering
+            else []
+        )
         subprocess.run(
             [
                 "cc",
@@ -58,12 +96,37 @@ class NativeVerifierContract(unittest.TestCase):
                 "-Wall",
                 "-Wextra",
                 "-Werror",
+                *options,
                 str(source),
                 "-o",
                 str(self.binary),
             ],
             check=True,
         )
+
+    def recovering_output(self, sanitizer):
+        self.compile(recovering=sanitizer)
+        directory = self.root / "recovering-control"
+        directory.mkdir()
+        result = subprocess.run(
+            [str(self.binary)],
+            cwd=directory,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("OWNER_TEST_RESULT control=0", result.stdout)
+        self.assertTrue(result.stdout.endswith("EVENT 1\n"))
+        if sanitizer == "address":
+            self.assertIn(
+                "ERROR: AddressSanitizer: heap-buffer-overflow", result.stdout
+            )
+            self.assertEqual(result.stderr, "")
+        else:
+            self.assertIn("runtime error: left shift of 1 by 31", result.stderr)
+            self.assertNotIn("runtime error:", result.stdout)
+        return result.stdout + result.stderr
 
     def test_positive_repeats_preserve_raw_output(self):
         self.compile()
@@ -173,6 +236,34 @@ class NativeVerifierContract(unittest.TestCase):
         self.compile(fatal=True)
         with self.assertRaisesRegex(AssertionError, "fatal assertion"):
             verify_native(self.output, self.tests)
+
+    @patch.dict("os.environ", ASAN_OPTIONS="halt_on_error=0:log_path=stdout")
+    def test_recovering_asan_stdout_is_not_snapshot_success(self):
+        self.recovering_output("address")
+        with self.assertRaisesRegex(AssertionError, "sanitizer diagnostic"):
+            verify_native(self.output, self.tests)
+
+    @patch.dict("os.environ", UBSAN_OPTIONS="halt_on_error=0")
+    def test_recovering_ubsan_stderr_is_not_snapshot_success(self):
+        self.recovering_output("undefined")
+        with self.assertRaisesRegex(AssertionError, "sanitizer diagnostic"):
+            verify_native(self.output, self.tests)
+
+    def test_sanitizer_names_and_config_are_not_diagnostics(self):
+        self.compile(benign=True)
+        verify_native(self.output, self.tests)
+
+    @patch.dict("os.environ", UBSAN_OPTIONS="halt_on_error=0")
+    def test_kernel_recovering_diagnostic_cannot_be_completion_success(self):
+        raw = self.recovering_output("undefined")
+        self.assertFalse(kernel_result_passed(0, raw, "EVENT 1"))
+
+    def test_kernel_sanitizer_name_is_a_valid_completion(self):
+        self.compile(benign=True)
+        result = subprocess.run([str(self.binary)], text=True, capture_output=True)
+        self.assertTrue(
+            kernel_result_passed(result.returncode, result.stdout, "EVENT 1")
+        )
 
 
 if __name__ == "__main__":

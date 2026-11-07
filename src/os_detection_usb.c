@@ -104,23 +104,49 @@ enum zmk_os zmk_os_classify_usb(const struct usb_fp_stats *stats) {
  * system work queue. */
 static struct usb_fp_stats stats;
 static struct k_spinlock stats_lock;
+static bool settle_armed;
+static int64_t settle_deadline;
+
+static void usb_settle_work_handler(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(usb_settle_work, usb_settle_work_handler);
 
 static void usb_settle_work_handler(struct k_work *work) {
     k_spinlock_key_t key = k_spin_lock(&stats_lock);
+    if (!settle_armed) {
+        k_spin_unlock(&stats_lock, key);
+        return;
+    }
+    int64_t remaining = settle_deadline - k_uptime_get();
+    if (remaining > 0) {
+        /* An already-running callback may belong to an earlier observation
+         * or enumeration. Only the current quiet deadline may consume it. */
+        k_work_reschedule(&usb_settle_work, K_MSEC(remaining));
+        k_spin_unlock(&stats_lock, key);
+        return;
+    }
     struct usb_fp_stats settled = stats;
+    settle_armed = false;
+    enum zmk_os detected = zmk_os_classify_usb(&settled);
+    /* The core reporter only updates RAM and submits system work. Keep that
+     * bounded publication inside the observation/reset lock, so a new
+     * enumeration cannot be replaced by an older snapshot after unlock. */
+    bool changed = zmk_os_detection_report_usb(detected);
     k_spin_unlock(&stats_lock, key);
 
-    enum zmk_os detected = zmk_os_classify_usb(&settled);
     LOG_DBG("os detection: USB fingerprint stats strings=%u other=%u bos=%d",
             settled.string_request_count, settled.string_wlength_other, settled.bos_requested);
-    zmk_os_detection_report_usb(detected);
+    if (changed) {
+        zmk_os_detection_log_usb(detected);
+    }
 }
-
-static K_WORK_DELAYABLE_DEFINE(usb_settle_work, usb_settle_work_handler);
 
 static void reset_usb_fp_stats(void) {
     k_spinlock_key_t key = k_spin_lock(&stats_lock);
     memset(&stats, 0, sizeof(stats));
+    settle_armed = false;
+    /* Park without CANCELING a running invocation: the next enumeration may
+     * rearm this work before that older invocation has returned. */
+    k_work_reschedule(&usb_settle_work, K_FOREVER);
     k_spin_unlock(&stats_lock, key);
 }
 
@@ -165,15 +191,15 @@ void zmk_os_detection_observe_setup(const struct usb_setup_packet *setup) {
         stats.bos_requested = true;
         stats.bos_wlength = setup->wLength;
     }
-    k_spin_unlock(&stats_lock, key);
-
+    settle_armed = true;
+    settle_deadline = k_uptime_get() + CONFIG_ZMK_OS_DETECTION_USB_SETTLE_MS;
     k_work_reschedule(&usb_settle_work, K_MSEC(CONFIG_ZMK_OS_DETECTION_USB_SETTLE_MS));
+    k_spin_unlock(&stats_lock, key);
 }
 
 static int os_detection_usb_listener(const zmk_event_t *eh) {
     const struct zmk_usb_conn_state_changed *ev = as_zmk_usb_conn_state_changed(eh);
     if (ev && ev->conn_state == ZMK_USB_CONN_NONE) {
-        k_work_cancel_delayable(&usb_settle_work);
         reset_usb_fp_stats();
     }
     return ZMK_EV_EVENT_BUBBLE;

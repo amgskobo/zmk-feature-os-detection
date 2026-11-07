@@ -14,11 +14,14 @@ headers = {
 #include <errno.h>
 #define IS_ENABLED(x) (x)
 #define K_MSEC(ms) (ms)
+#define K_FOREVER -1
+static int64_t boundary_now;
+static inline int64_t k_uptime_get(void) { return boundary_now; }
 struct k_work { void (*handler)(struct k_work *); };
 struct k_work_delayable { struct k_work work; bool pending; };
 #define K_WORK_DELAYABLE_DEFINE(n, h) struct k_work_delayable n = {.work.handler = h}
 static inline int k_work_reschedule(struct k_work_delayable *w, int delay) {
-    (void)delay; w->pending = true; return 0;
+    w->pending = delay != K_FOREVER; return 0;
 }
 static inline int k_work_cancel_delayable(struct k_work_delayable *w) {
     w->pending = false; return 0;

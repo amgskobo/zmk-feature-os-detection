@@ -1,7 +1,9 @@
 {
   "schema": 1,
   "owner": "zmk-os-detection-fork",
-  "supported_cores": ["dya"],
+  "supported_cores": [
+    "dya"
+  ],
   "unsupported_core_status": "NOT APPLICABLE",
   "commands": [
     "python3 -m unittest discover -v -s tests -p test_owner.py",
@@ -17,10 +19,13 @@
     "outputs": "Use a fresh evidence directory; existing evidence is never overwritten."
   },
   "gaps": [
-    "Physical USB/BLE/split delivery, timing, power and retention require matching production-board evidence."
+    "Physical USB/BLE/split delivery, timing, power and retention require matching production-board evidence.",
+    "Native ZMK combined ASan/UBSan remains BLOCKED on pinned DYA core e5c9b6915b56801193e359dd9bad4a167ce0d1b8: app/module/drivers/kscan/kscan_mock.c:103 expands signed 1 << 31. Strict runs stop at the first diagnostic. Recovering runs exit zero and complete unchanged snapshots but still emit five core diagnostics per run and must be rejected. Every diagnostic needs its exact raw offset/file/line/body/compiled-source hash; a known core fault does not classify later owner messages. USB/RPC checked init zero does not establish a clean whole process. Hardware acceptance remains separate."
   ],
-  "native_verification": "tests/native_verifier.py: actual exit, registered test completion, raw ordered logs, unchanged snapshots, identical binary repeated three times.",
-  "review_negative_controls": "tests/review_negative_control.py: quiet-deadline and publication-lock exercise the real-kernel BLE family; borrowed-read and borrowed-write exercise the real-registry settings-view family. Retain all five cases and three repetitions; compiler/setup failures are not detection.",
+  "sanitizer_matrix": "All three native fixtures retain normal, ASan-only, O2, strict combined and recovering combined profiles, with one binary per configuration and three independent initial-flash runs. The selected variant is 64BIT; four ARM profiles remain separate. O2 uses firmware CONFIG_SPEED_OPTIMIZATIONS=y and NSI_OPT=-O2. Strict combined uses CONFIG_ASAN_RECOVER=n plus explicit final EXTRA_CFLAGS=-fno-sanitize-recover=all and runtime halt options; its separate NSI Make runner has a runtime UBSan halt policy, not an assumed compiler-strict flag. Recovery uses CONFIG_ASAN_RECOVER=y, actual firmware/NSI -fsanitize-recover=all and halt_on_error=0. Standalone usb-session, ble-session and settings-view each retain five cases x three repeats under both combined profiles. Inspect effective config, actual built objects/Ninja deps/link map, C/header inputs, NSI Make/.d/nsi_config, flags and binary identities before launch; planned-only compdb rows do not establish compiled coverage. Host override/USB boundaries explicitly compile strict combined and optimized profiles; they do not declare recovering profiles.",
+  "native_verification": "tests/native_verifier.py and tests/sanitizer_output.py: actual exit, syntax-aware emitted sanitizer diagnostic rejection, registered checked-init completion, raw ordered logs, unchanged snapshots and identical binary repeated three times. Recovering process0/snapshot completion is rejected. tests/test_native_verifier.py retains the original eleven controls and adds five real-ELF native/kernel and benign-name/config cases (sixteen total); original recovery controls fail exactly the two intended missing-rejection assertions and fixed replay uses the same original ELFs without rebuilding.",
+  "review_negative_controls": "tests/review_negative_control.py: quiet-deadline/publication-lock use real-kernel BLE; borrowed-read/borrowed-write use real-registry settings-view; retain all five cases and three repetitions with specified assertion failures and positive controls. output-preflight must fail its eight specified missing-rejection assertions across six test methods without starting a build. kernel-recover injects a test-only signed shift in the real-kernel USB fixture under actual recovering flags; original runner accepts all fifteen diagnosed process0/PASS runs, fixed admission rejects same-ELF fresh replays. sdk-console-site appends a dormant dynamic-label console call to an isolated actual installed SDK lib/index.js; only the existing reviewed-sites AST assertion qualifies detection. Compiler/setup/mutation errors never qualify.",
+  "kernel_output_contract": "tests/test_kernel_output.py: six controls reject relative/existing file/directory/symlink (including dangling), missing-parent and owner/dependency paths after parent resolution; a valid external alias resolves without creating output.",
   "shared_settings_boundary": "OS direct by-key access is covered here. Production and isolated-test manifests pin Custom Settings c4071b095c3007d1deb055c609603ca9b5897d14, including generic WriteSetting identity guards. That generic path remains registry-owned and needs its owner controls. Another candidate requires an explicit CUSTOM_SETTINGS_MODULE selection and reviewed pin advancement.",
   "regression_fixtures": [
     {
@@ -32,6 +37,10 @@
       "contract": "Complete production USB observer/classifier: all four presence counters saturate across 65535/65536/longer valid reads; ignored requests add no evidence or debounce; reset and independent Apple/Linux/Windows classifications remain exact under optimization and ASan/UBSan."
     },
     {
+      "fixture": "tests/usb-session/main.c",
+      "contract": "Complete production USB observer/classifier on real kernel delayable work/spinlocks/time: five serial/reset/new-enumeration/same-enumeration/dead-work-disconnect cases, latest-read quiet lower bound, no retired publication, ignored requests and independent next enumeration; one binary, three fresh-process repeats per case. Original serial repeats pass and all other repeats fail publications == 0."
+    },
+    {
       "fixture": "tests/ble-session/main.c",
       "contract": "Complete production BLE observer on real kernel workqueues/mutexes/threads: five normal/old-work/new-debounce/publication/disconnected cases, independent profile and recovery controls, same binary three fresh-process repeats per case."
     },
@@ -39,5 +48,28 @@
       "fixture": "tests/settings-view/main.c",
       "contract": "Actual selected registry/array pool, production OS adapter and kernel handoff: five serial/override/cache read/write cases, twenty foreign lookups against sixteen pooled views, identity/error/retry controls, three repeats per case."
     }
-  ]
+  ],
+  "kernel_sanitizer_admission": "tests/kernel_boundary.py: kernel_result_passed() shares sanitizer_output.py recognition with native admission; process0 and a PASS marker cannot hide diagnostics. Unit controls include actual recovering UBSan stderr and benign-name/config positives; the named kernel-recover control exercises the real runner/ELF separately from clean product profiles.",
+  "web_console_site_control": "The existing tests/web/sdkConsole.spec.ts audit reads actual shipped SDK/hook JavaScript, including dormant code, and requires its reviewed literal-label sites. A build alone does not run that audit. The isolated sdk-console-site control must fail exactly that AST assertion under both workflow Node versions, with no runtime SDK execution or new suppression boundary.",
+  "web_dependency_security": {
+    "workflow_nodes": [
+      "22.23.4",
+      "24.18.0"
+    ],
+    "preparation": "Clean-cache npm ci with lifecycle scripts enabled; actual Linux postinstalls: @bufbuild/buf, @cormoran/zmk-studio-react-hook, @zmkfirmware/zmk-studio-ts-client, protobufjs, unrs-resolver. Preserve installed runtime/types/licenses/proto/extensionless files separately from donor src references.",
+    "selection": "Compatible DEV-transitive lock patches only; exact root/direct/tool/Git SDK+hook/protobuf records and production graph retained. Validate every changed incoming/outgoing semver edge and newly introduced record.",
+    "audit_observed_utc_date": "2026-11-07",
+    "full_audit": {
+      "critical": 0,
+      "high": 0,
+      "moderate": 14,
+      "low": 5,
+      "exit": 1
+    },
+    "production_only_audit": {
+      "total": 0,
+      "exit": 0
+    },
+    "limits": "Dated observations, not an all-dependency audit-clean claim. Existing 34 Web scenarios/7 suites, build/lint and SDK-site control remain required; historical Web-App control is NOT APPLICABLE to this C/admission/lock followup."
+  }
 }

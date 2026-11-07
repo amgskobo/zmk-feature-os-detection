@@ -225,10 +225,12 @@ Unchanged values and invalid requests do not raise another event. Existing
 native classifier/registration fixtures and real transport/NVS acceptance
 remain separate.
 
-The complete owner entry also runs the kernel session and array-view cases in
-`tests/ble-session/` and `tests/settings-view/`. They check reconnect while old
-settle work is running, result publication, and override/cache identity during
-cross-thread registry activity. Each case runs three times; see
+The complete owner entry also runs the kernel cases in `tests/usb-session/`,
+`tests/ble-session/` and `tests/settings-view/`. They check USB reset/new-read/
+disconnect while old settle work is running, BLE reconnect and publication,
+and override/cache identity during cross-thread registry activity. USB only
+publishes after the latest relevant read's quiet deadline; retired work cannot
+publish for a cleared enumeration. Each case runs three times; see
 [the owner contract](tests/README.md) for selected dependencies and evidence
 limits.
 

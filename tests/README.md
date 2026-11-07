@@ -80,10 +80,13 @@ duplicated test algorithms.
 
 The native verifier runs each built binary three times in independent empty
 initial-flash directories, retaining raw output before filtering. It checks real
-process exits, fatal assertions and every linked checked-init result before
-comparing unchanged owner snapshots. A SYS_INIT error cannot be hidden by a
-later matching key trace. Native scheduling and controlled APIs still do not
-establish physical transport/retention. Test-only core/tool dependencies are
+process exits, emitted sanitizer diagnostics, fatal assertions and every linked
+checked-init result before comparing unchanged owner snapshots. Recovering ASan
+or UBSan diagnostics reject a run even when it exits zero and finishes the key
+trace. Ordinary sanitizer names and configuration labels remain valid output.
+A SYS_INIT error cannot be hidden by a later matching key trace. Native
+scheduling and controlled APIs still do not establish physical transport/retention.
+Test-only core/tool dependencies are
 pinned; update pins only after reviewing the new sources and rerunning this
 owner matrix. No network updates are implicit in the owner test command.
 
@@ -102,12 +105,88 @@ repeats reuse one compiled binary with independent initial-flash state; keep
 the first failure and raw combined stdout/stderr order. DYA-only compatibility
 still means no stock-ZMK test requirement.
 
+Kernel fixture `--output` paths must be absolute, have an existing parent and
+be fresh: an existing file, directory or symlink (including a dangling one) is
+rejected. The resolved parent must keep the result outside the owner and all
+selected dependency sources, including explicit dependency overrides.
+`tests/test_kernel_output.py` retains six lightweight argument controls for
+these boundaries and a valid external parent alias. These controls run in the
+canonical owner entry before any fixture compilation.
+
 The test/tool static CI job installs pre-commit 4.7.0 and uses the pinned
 Ruff/clang-format/formatting hooks. Its SKIP list avoids repeating the firmware
 and Web jobs. Local full pre-commit execution may run those functional hooks;
 prepare Web dependencies with the normal package lifecycle first where present.
 A successful hook exit must also leave source inputs unchanged. Snapshot and
 event-pattern bytes are excluded from whitespace rewriting.
+
+### Sanitizer configurations and the selected-core boundary
+
+The selected ZMK `native_sim/native/zmk_test_mock` variant selects `64BIT` in
+its board Kconfig. Its ordinary native fixtures are therefore 64-bit checks;
+the four ARM board profiles exercise the production architecture separately.
+
+Native ZMK combined ASan/UBSan completion is currently **BLOCKED** on the pinned
+DYA core
+`e5c9b6915b56801193e359dd9bad4a167ce0d1b8`. Its
+`app/module/drivers/kscan/kscan_mock.c:103` expands a signed `1 << 31` in
+`kscan_mock_schedule_next_event_0`. The strict profile selects `CONFIG_ASAN=y`,
+`CONFIG_UBSAN=y`, `CONFIG_ASAN_RECOVER=n` and explicit
+`EXTRA_CFLAGS=-fno-sanitize-recover=all`; the effective final compiler flags
+must contain that last recovery choice. `CONFIG_ASAN_RECOVER=n` alone does not
+make every compiler invocation strict. The separate NSI Make runner retains its
+actual flags and uses `UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1`; that is
+a runtime stop policy, not a claim that its compiler used the firmware's
+`-fno-sanitize-recover=all` flag. UBSan terminates each strict process at the
+first core diagnostic. The same binary for each of the three fixtures
+reproduces that failure in all three fresh-process runs.
+
+The recovering profile selects `CONFIG_ASAN_RECOVER=y`, explicit
+`EXTRA_CFLAGS=-fsanitize-recover=all`, and sanitizer `halt_on_error=0` options.
+Both the actual firmware and NSI runner compiler flags include recovery. Each
+fixture then exits zero and completes its unchanged snapshot, while emitting
+five diagnostics from that same core source line per run. All three repetitions
+remain BLOCKED. The verifier rejects every diagnosed run independently;
+rejecting the first fixture does not validate the other fixtures. Classify every
+message by its raw offset, exact source/line/body and hash of the compiled source;
+an earlier known core diagnostic does not classify a later owner error.
+
+The USB and RPC checked initialization hooks each return zero before the later
+core fault; the feature-disabled fixture has no checked owner hook. Those hook
+results do not establish a clean whole-process result. Keep the raw order and
+classify the lane as BLOCKED, rather than
+changing the core, dropping fixtures or disabling OS features to clear it.
+
+Normal, ASan-only and optimized native configurations retain all three fixtures
+and three verified repeats. The optimized configuration uses
+`CONFIG_SPEED_OPTIMIZATIONS=y` for firmware C and the NSI Make runner's
+`NSI_OPT=-O2`; inspect both actual sets of flags. The ASan-only configuration
+keeps the same DYA features and separately passes the owner's
+exit/checked-init/unchanged-snapshot validator. The optimized and combined
+ASan/UBSan host boundaries are independent checks. The standalone kernel families do not use
+ZMK's kscan mock: all five cases in each of `usb-session`, `ble-session` and
+`settings-view` also complete three times under combined ASan/UBSan.
+
+Select a strict kernel configuration with Zephyr's `EXTRA_CONF_FILE` environment
+variable and an external, separately retained overlay containing
+`CONFIG_ASAN=y`, `CONFIG_ASAN_RECOVER=n` and `CONFIG_UBSAN=y`, plus
+`EXTRA_CFLAGS=-fno-sanitize-recover=all`. Use ASan and UBSan
+`halt_on_error=1` options. The recovering kernel profile uses
+`CONFIG_ASAN_RECOVER=y`, `EXTRA_CFLAGS=-fsanitize-recover=all` and
+`halt_on_error=0` options instead. Both profiles retain all five cases and three
+repeats in every family. `kernel_result_passed()` applies the same diagnostic
+recognition as native admission; a PASS marker and zero exit cannot hide a
+recovering diagnostic.
+
+Run the unchanged `tests/kernel_boundary.py` entry for every family with fresh
+absolute outputs. Retain overlay/config/binary hashes, actual built objects,
+compiler inputs and final flags before the first launch. The NSI runner is a
+separate Make build: retain its Makefile, `nsi_config`, `.d` files and actual
+C/header inputs alongside the root compilation database. Planned compilation
+database rows without objects do not establish compiled or linked coverage;
+check Ninja dependency records, the link command and map. Native ZMK, standalone
+kernel and host sanitizer results remain separate; none establishes physical USB/BLE or Flash
+acceptance.
 
 The `test_override_boundaries` owner case compiles the complete core, settings
 reader and RPC handler with real nanopb under ASan/UBSan and optimization.
@@ -139,10 +218,22 @@ these controls without dropping any native or board scenario.
 ## Kernel session and settings-view boundaries
 
 The canonical owner entry also runs `tests/kernel_boundary.py` for each of
-`ble-session` and `settings-view`. Each family builds one actual native kernel
+`usb-session`, `ble-session` and `settings-view`. Each family builds one actual native kernel
 binary and runs all five cases three times in fresh process directories. Logs,
 exits, binary/input identities and unchanged input checks are retained beneath
 `OWNER_TEST_OUTPUT`; existing output directories are refused.
+
+`usb-session` compiles the complete USB observer/classifier with real kernel
+delayable work, spinlocks and time. Five cases cover ordinary settle, reset of
+an already-running callback, a new enumeration's read before that old callback
+returns, another relevant read in the same enumeration, and disconnect while
+old work is running. Ordered packet/report timestamps require at least the
+configured 200ms quiet interval after the latest relevant read. Retired work
+must not publish; every case also checks ignored requests and a later independent
+Apple-shaped enumeration. The original source passes the serial case three
+times and fails all three repeats of each other case at `publications == 0`.
+USB requests/events and the nonblocking core report sink are controlled; these
+kernel observations do not establish physical enumeration or USB delivery.
 
 `ble-session` compiles the complete production BLE observer with real kernel
 workqueues, mutexes, timers and threads. Controlled Bluetooth callbacks cover
@@ -207,6 +298,8 @@ and three runs per case:
 
 | Fault | Family and expected executable failure |
 |---|---|
+| `kernel-recover` | `usb-session` with the recovering kernel profile: a test-only signed shift before the PASS marker must produce a diagnostic and be rejected for every case/repeat, even with process exit zero. The original runner accepts all fifteen; replay the same ELF through the fixed admission rule without rebuilding. |
+| `output-preflight` | `test_kernel_output.py`: missing absolute/fresh/source-exclusion rejection must fail the specified `assertRaisesRegex` controls; no build is launched. |
 | `quiet-deadline` | `ble-session`: `early` must detect an old callback consuming the new session before its quiet deadline. |
 | `publication-lock` | `ble-session`: `publication` must detect session replacement passing the gated old publication. |
 | `borrowed-read` | `settings-view`: override/cache reads must detect wrong-view values after cross-thread pool churn. |
@@ -215,18 +308,44 @@ and three runs per case:
 Compiler, setup and mutation-site failures are not successful defect controls.
 The optimized/ASan/UBSan policy and USB boundaries, all native snapshots, board
 profiles and Web checks remain required alongside these kernel controls.
+The two host boundary runners explicitly compile their sanitized binaries with
+`-fno-sanitize-recover=all` and runtime halt options; they do not declare a
+recovering profile. Their acceptance and exact flags remain separate from the
+kernel runner's externally selectable recovering profile.
 
 Native result admission requires every `native_sim.keymap` fixture to have a
 matching binary. `required_hooks.json` names the expected checked initialization
 hooks and required feature/role configuration. Fixture-bound declarations also
 reject missing configuration when both the request and build omit it; excluded
-roles cannot replace the requested role. The verifier retains all three raw
-runs before comparing unchanged ordered snapshots and rejects logged failures,
-fatal output and missing/nonzero completions. `tests/test_native_verifier.py`
-owns eleven real-ELF admission controls, including a deliberately missing
-native scenario, wrong-role and unrelated-fixture controls.
+roles cannot replace the requested role. The verifier retains each raw run
+before filtering and comparing its unchanged ordered snapshot. A successful
+fixture requires all three repeats; a failure stops that invocation, so diagnosed
+fixtures need independent replays to cover the complete matrix. It rejects logged failures,
+fatal output, sanitizer diagnostics and missing/nonzero completions.
+`tests/test_native_verifier.py` owns sixteen real-ELF admission controls. The
+original eleven missing-scenario, checked-init, exit, snapshot, wrong-role and
+unrelated-fixture controls remain. Additional controls produce recovering ASan
+on stdout and UBSan on stderr, each with zero exit, checked-init completion and
+the unchanged snapshot. The original verifier fails exactly the two specified
+missing-rejection assertions; the fixed verifier also rejects fresh replays of
+those original ELF bytes. Benign sanitizer/config labels remain positive native
+and kernel controls, and a real recovering kernel-style result is rejected.
+
+The existing pinned-SDK console-site audit is
+`tests/web/sdkConsole.spec.ts`. For its `sdk-console-site` negative control,
+prepare an isolated owner with an actual installed SDK copy, then run the same
+operator and canonical Web entry. The operator appends a dormant console call
+to the installed client's `lib/index.js`; it refuses a target that resolves
+outside the isolated owner. The AST audit must fail its named reviewed-sites
+assertion, with one additional dynamic-label site. The dormant call is never
+executed. This checks the existing audit boundary without adding a new runtime
+suppression mechanism; a production build alone does not execute that audit.
 
 `bash tests/run-web.sh` is the canonical schema-generation/Web test entry.
 It runs all configured Jest scenarios in one worker process. The pre-commit
 Jest hook dispatches this same owner entry so nested workers do not multiply
 the global container budget. Build and lint retain their separate package entries.
+Exercise both workflow versions, Node 22.23.4 and 24.18.0, using clean-cache
+`npm ci` with lifecycle scripts enabled. The packaged SDK/hook runtime and types
+are the actual installed inputs; an older donor's `src/` reference tree is a
+different artifact and cannot replace the clean install's prebuilt declarations.

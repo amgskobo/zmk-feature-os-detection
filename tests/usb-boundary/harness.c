@@ -13,7 +13,12 @@ static enum zmk_os reported;
         }                                                                                          \
     } while (0)
 
-void zmk_os_detection_report_usb(enum zmk_os detected) { reported = detected; }
+bool zmk_os_detection_report_usb(enum zmk_os detected) {
+    bool changed = reported != detected;
+    reported = detected;
+    return changed;
+}
+void zmk_os_detection_log_usb(enum zmk_os detected) { (void)detected; }
 int __real_usb_handle_bos(struct usb_setup_packet *setup, int32_t *len, uint8_t **data) {
     (void)setup;
     (void)len;
@@ -34,6 +39,7 @@ static void observe(uint8_t request, uint8_t type, uint16_t length) {
 static void settle_as(enum zmk_os expected, const char *scenario) {
     CHECK(usb_settle_work.pending);
     usb_settle_work.pending = false;
+    boundary_now += CONFIG_ZMK_OS_DETECTION_USB_SETTLE_MS;
     usb_settle_work.work.handler(&usb_settle_work.work);
     printf("USB %s strings=%u short=%u full=%u other=%u expected=%d actual=%d\n", scenario,
            stats.string_request_count, stats.string_wlength_hist[USB_FP_WLENGTH_2],

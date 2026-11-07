@@ -5,7 +5,22 @@ from pathlib import Path
 import re
 
 
+SDK_CONSOLE_CONTROL = (
+    "\nif (false) { console.info(globalThis.__synthetic_unreviewed_sdk_value); }\n"
+)
+
+
 FAULTS = {
+    "kernel-recover": (
+        "tests/usb-session/main.c",
+        'printk("PASS usb-session case=%s publications=%u time=%lld\\n", scenario, publications,',
+        'volatile unsigned control_shift = 31; volatile int control_value = 1 << control_shift; (void)control_value; printk("PASS usb-session case=%s publications=%u time=%lld\\n", scenario, publications,',
+    ),
+    "output-preflight": (
+        "tests/kernel_boundary.py",
+        "requested = Path(requested)",
+        "return Path(requested).resolve()",
+    ),
     "quiet-deadline": (
         "src/os_detection_ble.c",
         "if (remaining > 0) {",
@@ -31,13 +46,25 @@ FAULTS = {
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("fault", choices=FAULTS)
+    parser.add_argument("fault", choices=[*FAULTS, "sdk-console-site"])
     parser.add_argument("isolated_owner", type=Path)
     args = parser.parse_args()
     owner = Path(__file__).resolve().parents[1]
     isolated = args.isolated_owner.resolve()
     if isolated == owner or isolated.is_relative_to(owner):
         parser.error("Use an isolated container source copy")
+    if args.fault == "sdk-console-site":
+        path = (
+            isolated / "web/node_modules/@zmkfirmware/zmk-studio-ts-client/lib/index.js"
+        )
+        if not path.resolve().is_relative_to(isolated):
+            parser.error("Use an isolated installed SDK copy")
+        content = path.read_text()
+        if SDK_CONSOLE_CONTROL in content:
+            parser.error("SDK console control already exists")
+        path.write_text(content + SDK_CONSOLE_CONTROL)
+        print("Applied isolated negative control: " + args.fault)
+        return
     relative, old, new = FAULTS[args.fault]
     path = isolated / relative
     content = path.read_text()

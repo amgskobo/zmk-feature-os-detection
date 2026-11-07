@@ -9,8 +9,11 @@ from pathlib import Path
 import re
 import subprocess
 
+from sanitizer_output import sanitizer_diagnostic
+
 ROOT = Path(__file__).resolve().parent.parent
 CASES = {
+    "usb-session": ["serial", "reset", "debounce", "refresh", "disconnected"],
     "ble-session": ["serial", "latch", "early", "publication", "disconnected"],
     "settings-view": [
         "serial",
@@ -30,19 +33,33 @@ def selected_project(name):
     ).resolve()
 
 
+def validate_output_path(requested, source_roots):
+    requested = Path(requested)
+    if not requested.is_absolute():
+        raise ValueError("output must be an absolute path")
+    if requested.exists() or requested.is_symlink():
+        raise ValueError("output already exists (file, directory or symlink)")
+    try:
+        parent = requested.parent.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError("output parent must exist") from exc
+    output = parent / requested.name
+    if any(output.is_relative_to(Path(root).resolve()) for root in source_roots):
+        raise ValueError("output must be outside owner and dependency sources")
+    return output
+
+
 def inputs(family, custom):
     files = list((ROOT / "tests" / family).rglob("*"))
     files += [ROOT / "tests/kernel_boundary.py", ROOT / "src/os_detection_internal.h"]
+    files.append(ROOT / "tests/sanitizer_output.py")
     files += list((ROOT / "include").rglob("*.h"))
-    files.append(
-        ROOT
-        / "src"
-        / (
-            "os_detection_ble.c"
-            if family == "ble-session"
-            else "os_detection_settings.c"
-        )
-    )
+    source = {
+        "usb-session": "os_detection_usb.c",
+        "ble-session": "os_detection_ble.c",
+        "settings-view": "os_detection_settings.c",
+    }[family]
+    files.append(ROOT / "src" / source)
     if custom:
         files += list((custom / "src").rglob("*.c"))
         files += list((custom / "include").rglob("*"))
@@ -53,15 +70,41 @@ def inputs(family, custom):
     }
 
 
+def kernel_result_passed(returncode, raw, marker):
+    return (
+        returncode == 0
+        and marker in raw
+        and not sanitizer_diagnostic(raw)
+        and not re.search(
+            r"ASSERTION FAIL|ZEPHYR FATAL|HARNESS FAIL|^FAIL ", raw, re.MULTILINE
+        )
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("family", choices=CASES)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    output = args.output.resolve()
-    output.mkdir(parents=True, exist_ok=False)
     zephyr = Path(os.environ.get("ZEPHYR_BASE") or selected_project("zephyr")).resolve()
     custom = None
+    zmk = None
+    if args.family == "settings-view":
+        custom = Path(
+            os.environ.get("CUSTOM_SETTINGS_MODULE")
+            or selected_project("zmk-feature-custom-settings")
+        ).resolve()
+        zmk = Path(os.environ.get("ZMK_ROOT") or selected_project("zmk")).resolve()
+    source_roots = [ROOT, zephyr]
+    source_roots += [root for root in (custom, zmk) if root is not None]
+    source_roots += subprocess.check_output(
+        ["west", "list", "-f", "{abspath}"], text=True, cwd=ROOT
+    ).splitlines()
+    try:
+        output = validate_output_path(args.output, source_roots)
+    except ValueError as exc:
+        parser.error(str(exc))
+    output.mkdir(exist_ok=False)
     command = [
         "cmake",
         "-S",
@@ -76,11 +119,6 @@ def main():
         "-DZEPHYR_BASE=" + str(zephyr),
     ]
     if args.family == "settings-view":
-        custom = Path(
-            os.environ.get("CUSTOM_SETTINGS_MODULE")
-            or selected_project("zmk-feature-custom-settings")
-        ).resolve()
-        zmk = Path(os.environ.get("ZMK_ROOT") or selected_project("zmk")).resolve()
         command += ["-DCUSTOM_SETTINGS_MODULE=" + str(custom), "-DZMK_ROOT=" + str(zmk)]
     before = inputs(args.family, custom)
     (output / "inputs.json").write_text(json.dumps(before, indent=2) + "\n")
@@ -105,7 +143,11 @@ def main():
             directory.mkdir(parents=True)
             env = dict(os.environ)
             env[
-                "OS_BLE_CASE" if args.family == "ble-session" else "OS_SETTINGS_CASE"
+                {
+                    "usb-session": "OS_USB_CASE",
+                    "ble-session": "OS_BLE_CASE",
+                    "settings-view": "OS_SETTINGS_CASE",
+                }[args.family]
             ] = case
             with (directory / "raw.log").open("w") as log:
                 result = subprocess.run(
@@ -118,15 +160,7 @@ def main():
                 )
             raw = (directory / "raw.log").read_text()
             marker = f"PASS {args.family} case={case}"
-            passed = (
-                result.returncode == 0
-                and marker in raw
-                and not re.search(
-                    r"ASSERTION FAIL|ZEPHYR FATAL|HARNESS FAIL|^FAIL ",
-                    raw,
-                    re.MULTILINE,
-                )
-            )
+            passed = kernel_result_passed(result.returncode, raw, marker)
             record = {
                 "case": case,
                 "repeat": repeat,

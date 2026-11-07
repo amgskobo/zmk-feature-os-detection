@@ -150,13 +150,18 @@ static K_WORK_DEFINE(os_changed_work, os_changed_work_handler);
 
 static void raise_if_changed(void) { k_work_submit(&os_changed_work); }
 
-void zmk_os_detection_report_usb(enum zmk_os detected) {
+bool zmk_os_detection_report_usb(enum zmk_os detected) {
     if (usb_detected == detected) {
-        return;
+        return false;
     }
-    LOG_INF("os detection: USB fingerprint settled on %d", detected);
     usb_detected = detected;
     raise_if_changed();
+    return true;
+}
+
+void zmk_os_detection_log_usb(enum zmk_os detected) {
+    ARG_UNUSED(detected);
+    LOG_INF("os detection: USB fingerprint settled on %d", detected);
 }
 
 #if IS_ENABLED(CONFIG_ZMK_OS_DETECTION_BLE)

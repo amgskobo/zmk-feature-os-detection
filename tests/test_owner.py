@@ -13,6 +13,7 @@ from native_verifier import verify_native
 from test_native_verifier import NativeVerifierContract as NativeVerifierContract
 
 from test_build_budget import BuildBudgetContract as BuildBudgetContract
+from test_kernel_output import KernelOutputContract as KernelOutputContract
 
 THIS_DIR = Path(__file__).resolve().parent.parent
 TEST_BUILD_DIR_NAME = "tests-zmk-feature-os-detection"
@@ -115,6 +116,10 @@ class WestCommandsTests(unittest.TestCase):
         (self.BUILD_DIR / (family + ".log")).write_text(result.stdout + result.stderr)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.count(" PASS\n"), 15)
+
+    @unittest.skipUnless(platform.system() == "Linux", "kernel checks require Linux")
+    def test_usb_session_boundaries(self):
+        self._test_kernel_boundary("usb-session")
 
     @unittest.skipUnless(platform.system() == "Linux", "kernel checks require Linux")
     def test_ble_session_boundaries(self):

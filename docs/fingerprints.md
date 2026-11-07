@@ -11,8 +11,14 @@ The observer in `src/os_detection_usb.c` tracks string descriptor lengths and th
 last BOS descriptor length. Only the request direction and descriptor kinds
 used by that observer contribute; other requests do not restart its debounce.
 SET_ADDRESS starts a new enumeration and clears the statistics. Disconnect
-cancels pending settle work and clears them. A quiet interval of
-`CONFIG_ZMK_OS_DETECTION_USB_SETTLE_MS` triggers classification.
+retires settlement and clears them. Both also retire an already-running settle
+callback. Classification requires the current observation's quiet interval of
+`CONFIG_ZMK_OS_DETECTION_USB_SETTLE_MS`; a new relevant read extends that
+deadline even when earlier work is already running. Snapshot publication and
+observation/reset share a spinlock; the core reporter only updates RAM and
+queues the effective-OS event on the system workqueue.
+Logging runs after the spinlock is released; immediate or blocking logger
+backends are outside that publication boundary.
 
 | Observation | Result |
 | --- | --- |
@@ -91,6 +97,9 @@ fixture preserves the exact Windows/Mac/Linux/Apple-remote-wakeup scenarios.
 `tests/usb-boundary/` compiles the complete production USB source with controlled
 kernel/USB APIs and checks 65,535/65,536/longer presence, ignored requests, reset
 and independent classifications under optimization and ASan/UBSan.
+`tests/usb-session/` uses the real kernel to gate an already-running callback
+across reset, new reads and disconnect. It checks the quiet-time lower bound,
+absence of retired publications and the next independent enumeration.
 `tests/override-boundary/` compiles complete core/settings/BLE/RPC sources with
 real nanopb and controlled APIs. Board/native checks cover supported feature
 variants and actual DYA registration. Web assertions live in `tests/web/`.

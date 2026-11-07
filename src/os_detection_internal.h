@@ -31,8 +31,11 @@ struct usb_fp_stats {
 
 enum zmk_os zmk_os_classify_usb(const struct usb_fp_stats *stats);
 
-/* Called by os_detection_usb.c once a USB enumeration cycle has settled. */
-void zmk_os_detection_report_usb(enum zmk_os detected);
+/* Nonblocking RAM publication and event-work submission; returns whether it
+ * changed. The observer may call this with its spinlock held. Log changes
+ * separately after releasing that lock, since logger backends may block. */
+bool zmk_os_detection_report_usb(enum zmk_os detected);
+void zmk_os_detection_log_usb(enum zmk_os detected);
 
 /* --- BLE fingerprint (os_detection_ble.c -> classifier) --- */
 

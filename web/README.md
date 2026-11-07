@@ -146,13 +146,19 @@ preview deployment instead (requires `CLOUDFLARE_API_TOKEN` /
 
 ## Console privacy
 
-The local Vite plugin replaces the two locked Studio SDKs' exception log
-arguments with fixed error categories. Messages, stacks, causes, device/profile
-names and arbitrary error names are not SDK console arguments. New SDK console
-sites stop the build for privacy review. Excluding the SDKs from development
-prebundling applies the same transform in development and production. Transport,
-exception propagation and visible UI messages are preserved. Browser/framework
-diagnostics and unrelated browser extensions remain separate domains.
+The runtime console guard is installed before the app and Studio SDK imports.
+It preserves a first string argument as a fixed label, keeps numeric/boolean
+values, redacts later strings and limits errors to fixed categories. Plain
+objects retain their keys with values redacted to a bounded depth. Transport,
+exception propagation and visible UI messages are preserved.
+
+`tests/web/sdkConsole.spec.ts` audits the two pinned SDKs' actual shipped
+JavaScript with the TypeScript AST. Every console use must match a reviewed
+literal-label site; a new site fails that test for review. The production build
+alone does not run this audit. The owner's `sdk-console-site` defect control
+adds a dormant dynamic-label call to an isolated installed SDK and must fail
+that exact assertion. Browser/framework diagnostics and unrelated extensions
+remain separate acceptance domains.
 
 ## Dependency security
 
@@ -160,3 +166,19 @@ diagnostics and unrelated browser extensions remain separate domains.
 to `7.6.5`, including the patched UTF-8 helper. Use `npm ci` with this lockfile.
 After changing dependencies, run `npm audit --omit=dev`, the Web tests and the
 production build.
+
+The development transitive lock patches preserve the exact root/direct
+dependencies, Git SDK/hook commits, tool versions and production dependency
+graph. Their changed incoming semver ranges must remain satisfied. On
+2026-11-07 the full audit reported 14 moderate and five low findings, with no
+high or critical findings; `npm audit` still exited 1. The production-only
+audit reported zero findings. These retained results are dated observations;
+rerun both audits when reviewing a new dependency selection.
+
+Both workflow versions, Node 22.23.4 and 24.18.0, use clean-cache `npm ci` with
+lifecycle scripts enabled. The Linux postinstall packages are `@bufbuild/buf`,
+`@cormoran/zmk-studio-react-hook`, `@zmkfirmware/zmk-studio-ts-client`,
+`protobufjs` and `unrs-resolver`. Retain the actual installed files, including
+runtime JavaScript, declarations, licenses and protobuf schemas. The clean
+Git-package installs contain shipped `lib/` files; donor `src/` trees and their
+locally regenerated declarations are references, not the installed inputs.
