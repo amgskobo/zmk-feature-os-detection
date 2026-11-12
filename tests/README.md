@@ -69,6 +69,13 @@ is printed and retained. No shared build directory is deleted. Use
 `PYTHONPATH=tests python3 -m unittest -v test_owner.WestCommandsTests.<method>`
 for a focused case; discovery runs the complete documented class.
 
+The configured firmware hook pins the complete discovery command and forwards
+no filenames. Named or `-k` unittest invocations remain focused diagnostics.
+The complete Web wrapper accepts no selector arguments and pins one Jest
+worker. `tests/test_web_entry.py` owns two controlled admission/dispatch cases;
+direct npm/Jest commands remain available for focused checks and do not
+establish a complete Web result.
+
 Web assertions and Jest configuration live in `tests/web/`; application source
 and installed dependencies remain in `web/`. The package scripts only dispatch
 the owner configuration. No dependencies are installed implicitly by the tests.
@@ -196,6 +203,15 @@ allow the valid detected OS to remain effective. Actual response encoding and
 decoding must retain that fallback; valid UNKNOWN through ANDROID values remain
 unchanged. The settings backend is controlled, so physical persistence remains
 an independent gate.
+
+Each RPC BLE profile record derives its effective OS from the detected and
+override values included in that record. The override boundary changes the
+stored override immediately after a read; a second lookup must not contradict
+the displayed override. It also checks all 36 detected/override combinations,
+one override lookup per record and independence from another profile. The
+original handler fails the snapshot and duplicate-read assertions under both
+optimization and strict ASan/UBSan. This is a per-record consistency boundary;
+the complete multi-profile response is not an atomic registry snapshot.
 
 `test_usb_observation_boundaries` runs `tests/usb-boundary/run.py`, compiling
 the complete production USB observer and classifier under optimization and
@@ -341,7 +357,8 @@ assertion, with one additional dynamic-label site. The dormant call is never
 executed. This checks the existing audit boundary without adding a new runtime
 suppression mechanism; a production build alone does not execute that audit.
 
-`bash tests/run-web.sh` is the canonical schema-generation/Web test entry.
+`bash tests/run-web.sh` is the canonical schema-generation/Web test entry and
+accepts no extra arguments. Use direct npm/Jest commands for a focused check.
 It runs all configured Jest scenarios in one worker process. The pre-commit
 Jest hook dispatches this same owner entry so nested workers do not multiply
 the global container budget. Build and lint retain their separate package entries.

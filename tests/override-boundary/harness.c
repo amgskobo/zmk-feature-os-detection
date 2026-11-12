@@ -14,6 +14,8 @@ static int persist_error;
 static int32_t values[2][ZMK_BLE_PROFILE_COUNT];
 static struct zmk_custom_setting settings[2][ZMK_BLE_PROFILE_COUNT];
 static unsigned writes;
+static unsigned override_reads[ZMK_BLE_PROFILE_COUNT];
+static bool change_override_after_read;
 static unsigned event_count;
 static enum zmk_os event_os;
 static unsigned failures;
@@ -155,6 +157,14 @@ int zmk_custom_setting_read(const struct zmk_custom_setting *setting,
                             struct zmk_custom_setting_value *out) {
     unsigned row = strcmp(setting->key, "ble_override") == 0 ? 0 : 1;
     *out = ZMK_CUSTOM_SETTING_VALUE_INT32(values[row][setting->index]);
+    if (row == 0) {
+        override_reads[setting->index]++;
+        /* A concurrent settings writer may change RAM between two reads.
+         * One profile response must derive effective from its displayed data. */
+        if (change_override_after_read) {
+            values[row][setting->index] = ZMK_OS_LINUX;
+        }
+    }
     return 0;
 }
 int zmk_custom_setting_write(const struct zmk_custom_setting *setting,
@@ -193,6 +203,8 @@ static void reset(void) {
     event_os = ZMK_OS_UNKNOWN;
     lock_state = ZMK_STUDIO_CORE_LOCK_STATE_UNLOCKED;
     writes = 0;
+    memset(override_reads, 0, sizeof(override_reads));
+    change_override_after_read = false;
     memset(profile_stats, 0, sizeof(profile_stats));
     for (int i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
         profile_settle[i].conn = NULL;
@@ -224,6 +236,38 @@ static cormoran_os_detection_Response request(uint32_t index) {
     return decoded;
 }
 int main(void) {
+    reset();
+    ble_detected[0] = ZMK_OS_MACOS;
+    values[0][0] = ZMK_OS_WINDOWS;
+    change_override_after_read = true;
+    cormoran_os_detection_BleProfileState profile_state =
+        cormoran_os_detection_BleProfileState_init_zero;
+    fill_ble_profile_state(0, &profile_state);
+    CHECK(profile_state.detected == cormoran_os_detection_Os_OS_MACOS);
+    CHECK(profile_state.override == cormoran_os_detection_Os_OS_WINDOWS);
+    CHECK(profile_state.effective == cormoran_os_detection_Os_OS_WINDOWS);
+    CHECK(override_reads[0] == 1 && values[0][0] == ZMK_OS_LINUX);
+    printf("RPC profile snapshot reads=%u failures=%u\n", override_reads[0], failures);
+
+    for (int32_t detected = ZMK_OS_UNKNOWN; detected <= ZMK_OS_ANDROID; detected++) {
+        for (int32_t override = ZMK_OS_UNKNOWN; override <= ZMK_OS_ANDROID; override++) {
+            reset();
+            ble_detected[3] = detected;
+            values[0][3] = override;
+            values[0][1] = ZMK_OS_IOS;
+            fill_ble_profile_state(3, &profile_state);
+            CHECK(profile_state.index == 3 && profile_state.bonded && profile_state.connected);
+            CHECK(profile_state.detected == (cormoran_os_detection_Os)(detected + 1));
+            CHECK(profile_state.override == (cormoran_os_detection_Os)(override + 1));
+            CHECK(
+                profile_state.effective ==
+                (cormoran_os_detection_Os)((override == ZMK_OS_UNKNOWN ? detected : override) + 1));
+            CHECK(override_reads[3] == 1 && override_reads[1] == 0);
+            CHECK(values[0][1] == ZMK_OS_IOS && writes == 0 && event_count == 0);
+        }
+    }
+    printf("RPC profile enums combinations=36 failures=%u\n", failures);
+
     reset();
     zmk_os_detection_report_ble_detected(0, ZMK_OS_MACOS);
     CHECK(event_count == 1);

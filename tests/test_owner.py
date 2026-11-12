@@ -14,6 +14,7 @@ from test_native_verifier import NativeVerifierContract as NativeVerifierContrac
 
 from test_build_budget import BuildBudgetContract as BuildBudgetContract
 from test_kernel_output import KernelOutputContract as KernelOutputContract
+from test_web_entry import WebEntryContract as WebEntryContract
 
 THIS_DIR = Path(__file__).resolve().parent.parent
 TEST_BUILD_DIR_NAME = "tests-zmk-feature-os-detection"

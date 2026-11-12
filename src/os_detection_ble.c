@@ -116,14 +116,15 @@ static void ble_settle_work_handler(struct k_work *work) {
      * through publication so old results cannot land in a replacement session. */
     settle->settled = true;
     settle->deadline = 0;
-    struct ble_fp_stats stats = profile_stats[profile_index];
+    /* The profile mutex keeps these statistics stable through publication. */
+    const struct ble_fp_stats *stats = &profile_stats[profile_index];
 
-    enum zmk_os detected = zmk_os_classify_ble(&stats);
+    enum zmk_os detected = zmk_os_classify_ble(stats);
     LOG_DBG("os detection: BLE fingerprint stats profile=%d report_map=%u hids_info=%u "
             "report_ref=%u pnp_id=%u appearance=%u mtu=%u interval=%u -> os=%d",
-            profile_index, stats.report_map_reads, stats.hids_info_reads, stats.report_ref_reads,
-            stats.pnp_id_reads, stats.appearance_reads, stats.att_mtu, stats.initial_conn_interval,
-            detected);
+            profile_index, stats->report_map_reads, stats->hids_info_reads, stats->report_ref_reads,
+            stats->pnp_id_reads, stats->appearance_reads, stats->att_mtu,
+            stats->initial_conn_interval, detected);
     zmk_os_detection_report_ble_detected(profile_index, detected);
     k_mutex_unlock(&settle->lock);
 }

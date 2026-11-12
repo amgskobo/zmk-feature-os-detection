@@ -37,10 +37,9 @@ ZMK_RPC_CUSTOM_SUBSYSTEM(cormoran__os_detection, &os_detection_meta,
 ZMK_RPC_CUSTOM_SUBSYSTEM_RESPONSE_BUFFER(cormoran__os_detection, cormoran_os_detection_Response);
 
 static void set_error(cormoran_os_detection_Response *resp, const char *message) {
-    cormoran_os_detection_ErrorResponse err = cormoran_os_detection_ErrorResponse_init_zero;
-    snprintf(err.message, sizeof(err.message), "%s", message);
     resp->which_response_type = cormoran_os_detection_Response_error_tag;
-    resp->response_type.error = err;
+    snprintf(resp->response_type.error.message, sizeof(resp->response_type.error.message), "%s",
+             message);
 }
 
 /* enum zmk_os starts at ZMK_OS_UNKNOWN=0; cormoran_os_detection_Os starts at
@@ -67,7 +66,10 @@ static void fill_ble_profile_state(uint8_t index, cormoran_os_detection_BleProfi
     out->connected = zmk_os_detection_ble_profile_connected(index);
     out->detected = zmk_os_to_proto(zmk_os_detection_ble_profile_detected(index));
     out->override = zmk_os_to_proto(zmk_os_detection_ble_profile_override(index));
-    out->effective = zmk_os_to_proto(zmk_os_detection_ble_profile_effective(index));
+    /* Reuse this record's values: a second settings read could see an override
+     * changed by another thread and contradict the override we just reported. */
+    out->effective =
+        out->override == cormoran_os_detection_Os_OS_UNKNOWN ? out->detected : out->override;
 }
 
 static void handle_get_state(cormoran_os_detection_StateResponse *out) {
@@ -155,9 +157,9 @@ static bool os_detection_rpc_handle_request(const zmk_custom_CallRequest *raw_re
         set_error(resp, "Overrides need BLE detection and Custom Settings");
     } else if (rc != 0) {
         /* Custom Settings keeps the new RAM value when saving fails. */
-        char message[sizeof(resp->response_type.error.message)];
-        snprintf(message, sizeof(message), "Override applied but not saved: %d", rc);
-        set_error(resp, message);
+        resp->which_response_type = cormoran_os_detection_Response_error_tag;
+        snprintf(resp->response_type.error.message, sizeof(resp->response_type.error.message),
+                 "Override applied but not saved: %d", rc);
     }
     return true;
 }

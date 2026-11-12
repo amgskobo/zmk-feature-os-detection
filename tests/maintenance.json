@@ -10,6 +10,7 @@
     "bash tests/run-web.sh"
   ],
   "coverage_map": "tests/README.md",
+  "full_selection": "The configured firmware hook pins complete discovery and forwards no filenames; named/-k unittest commands remain focused diagnostics. tests/test_web_entry.py retains two controlled cases: the complete Web wrapper rejects extra selectors before runtime and its normal dispatch pins one Jest worker with no selectors. Direct npm/Jest commands remain available as focused checks.",
   "web_lifecycle_fixture": "tests/web/lifecycle.spec.tsx: twelve actual-provider scenarios for poll/override success, error, loading completion, unmount, serialized automatic polling, foreground override completion and four index-only cases retaining the same provider/connection with actual SDK subsystem indices 2 and 7; fifteen original scenarios retained.",
   "web_polling_fixture": "tests/web/polling.spec.tsx: seven provider/SDK scenarios for single-flight automatic admission, valid 4000ms responses, foreground override ownership, actual 5000ms SDK timeout/recovery, source cleanup and empty/malformed/remote-error release;3000ms interval and SDK deadline unchanged. All prior lifecycle assertions retained with classified non-overlap timing. Canonical test/watch/coverage regenerate the current schema before collection.",
   "preserved_assertions": "Relocated fixtures retain their prior assertions; no snapshot auto-accept or unique assertion removal.",
@@ -30,7 +31,7 @@
   "regression_fixtures": [
     {
       "fixture": "tests/override-boundary/harness.c",
-      "contract": "Read invalid stored/imported OS values as UNKNOWN without storage writes/events; valid enums, independent profiles, detected fallback and decoded nanopb response remain exact."
+      "contract": "Read invalid stored/imported OS values as UNKNOWN without storage writes/events; valid enums, independent profiles, detected fallback and decoded nanopb response remain exact. Each RPC profile record derives effective from its displayed detected/override values with one override lookup. A controlled change after the first read rejects contradictory repeated reads; all 36 enum combinations and independent profiles remain exact. The complete response is not an atomic registry snapshot."
     },
     {
       "fixture": "tests/usb-boundary/harness.c",
